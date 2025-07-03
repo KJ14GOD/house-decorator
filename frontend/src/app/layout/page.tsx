@@ -1,8 +1,52 @@
 "use client";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
 import { OrbitControls, Edges, PointerLockControls, Text } from "@react-three/drei";
 import * as THREE from 'three';
+
+function RulerDisplay({ points, scale, isPreview = false }) {
+  const [start, end] = points;
+  const length = start.distanceTo(end) / scale;
+  const midPoint = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
+
+  return (
+    <group>
+      <line>
+        <bufferGeometry>
+          <bufferAttribute
+            attach="attributes-position"
+            count={2}
+            array={new Float32Array([...start.toArray(), ...end.toArray()])}
+            itemSize={3}
+          />
+        </bufferGeometry>
+        <lineBasicMaterial color={isPreview ? "#3b82f6" : "#dc2626"} linewidth={3} />
+      </line>
+      <Text
+        position={midPoint.add(new THREE.Vector3(0, 0.1, 0))}
+        fontSize={0.15}
+        color="#111827"
+        anchorX="center"
+        anchorY="middle"
+        outlineColor="#fff"
+        outlineWidth={0.01}
+      >
+        {`${length.toFixed(2)} ft`}
+      </Text>
+    </group>
+  );
+}
+
+function RulerRenderer({ rulers, preview, scale }) {
+  return (
+    <group>
+      {rulers.map((ruler, i) => (
+        <RulerDisplay key={i} points={ruler} scale={scale} />
+      ))}
+      {preview && <RulerDisplay points={preview} scale={scale} isPreview />}
+    </group>
+  );
+}
 
 function RoomBox({ width, length, height, floorColor, ceilingColor, wallFrontColor, wallBackColor, wallLeftColor, wallRightColor, hideCeiling = false, hideFloor = false, blocks = [], previewBlock = null }: {
   width: number;
@@ -331,6 +375,101 @@ export default function LayoutPage() {
   });
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
 
+  const [rulerMode, setRulerMode] = useState(false);
+  const [rulers, setRulers] = useState<Array<[THREE.Vector3, THREE.Vector3]>>([]);
+  const [rulerPreview, setRulerPreview] = useState<[THREE.Vector3, THREE.Vector3] | null>(null);
+  const [rulerStartPoint, setRulerStartPoint] = useState<THREE.Vector3 | null>(null);
+
+  const sceneRef = useRef<THREE.Scene>(null);
+
+  const findSnapPoint = useCallback((intersectPoint: THREE.Vector3, threshold = 0.2): THREE.Vector3 => {
+    if (!sceneRef.current) return intersectPoint;
+
+    let closestVertex: THREE.Vector3 | null = null;
+    let minDistance = Infinity;
+
+    sceneRef.current.traverse((object) => {
+      if (object instanceof THREE.Mesh) {
+        const geometry = object.geometry;
+        const position = geometry.attributes.position;
+        if (position) {
+          const worldMatrix = object.matrixWorld;
+          for (let i = 0; i < position.count; i++) {
+            const localVertex = new THREE.Vector3().fromBufferAttribute(position, i);
+            const worldVertex = localVertex.applyMatrix4(worldMatrix);
+            const distance = intersectPoint.distanceTo(worldVertex);
+            if (distance < minDistance) {
+              minDistance = distance;
+              closestVertex = worldVertex;
+            }
+          }
+        }
+      }
+    });
+
+    if (closestVertex && minDistance < threshold) {
+      return closestVertex;
+    }
+
+    return intersectPoint;
+  }, []);
+
+  function SceneEvents({
+    rulerMode,
+    rulerStartPoint,
+    setRulerStartPoint,
+    setRulers,
+    setRulerPreview,
+  }: {
+    rulerMode: boolean;
+    rulerStartPoint: THREE.Vector3 | null;
+    setRulerStartPoint: React.Dispatch<React.SetStateAction<THREE.Vector3 | null>>;
+    setRulers: React.Dispatch<React.SetStateAction<[THREE.Vector3, THREE.Vector3][]>>;
+    setRulerPreview: React.Dispatch<React.SetStateAction<[THREE.Vector3, THREE.Vector3] | null>>;
+  }) {
+    const { scene } = useThree();
+    useEffect(() => {
+      (sceneRef as any).current = scene;
+    }, [scene]);
+
+    const handlePointerDown = (event: any) => {
+      if (!rulerMode) return;
+      event.stopPropagation();
+
+      const intersectPoint = event.point;
+      const snapPoint = findSnapPoint(intersectPoint);
+
+      if (!rulerStartPoint) {
+        setRulerStartPoint(snapPoint);
+      } else {
+        setRulers((prev) => [...prev, [rulerStartPoint, snapPoint]]);
+        setRulerStartPoint(null);
+        setRulerPreview(null);
+      }
+    };
+
+    const handlePointerMove = (event: any) => {
+      if (!rulerMode || !rulerStartPoint) return;
+      event.stopPropagation();
+
+      const intersectPoint = event.point;
+      const snapPoint = findSnapPoint(intersectPoint);
+      setRulerPreview([rulerStartPoint, snapPoint]);
+    };
+
+    return (
+      <mesh
+        visible={false}
+        rotation={[-Math.PI / 2, 0, 0]}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+      >
+        <planeGeometry args={[1000, 1000]} />
+        <meshBasicMaterial />
+      </mesh>
+    );
+  }
+
   // Add state for menu sections and search
   const [previewMode, setPreviewMode] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -408,6 +547,97 @@ export default function LayoutPage() {
       ...prev,
       [section]: !prev[section]
     }));
+  };
+
+  const [chatbotOpen, setChatbotOpen] = useState(true);
+  const [chatMessages, setChatMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+
+  const handleChatSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInput.trim() || isLoading) return;
+
+    const newMessages: Array<{ role: 'user' | 'assistant'; content: string }> = [
+      ...chatMessages,
+      { role: 'user', content: chatInput },
+    ];
+    setChatMessages(newMessages);
+    setChatInput('');
+    setIsLoading(true);
+
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          prompt: chatInput,
+          roomState: {
+            width,
+            length,
+            height,
+            floorColor,
+            ceilingColor,
+            wallFrontColor,
+            wallBackColor,
+            wallLeftColor,
+            wallRightColor,
+            blocks,
+          },
+        }),
+      });
+
+      const data = await response.json();
+
+      if (data.action === 'change_color') {
+        const { target, value } = data;
+        const colorSetters: { [key: string]: (color: string) => void } = {
+          floorColor: setFloorColor,
+          ceilingColor: setCeilingColor,
+          wallFrontColor: setWallFrontColor,
+          wallBackColor: setWallBackColor,
+          wallLeftColor: setWallLeftColor,
+          wallRightColor: setWallRightColor,
+        };
+
+        if (colorSetters[target]) {
+          colorSetters[target](value);
+          setChatMessages([
+            ...newMessages,
+            {
+              role: 'assistant',
+              content: `I've changed the ${target.replace('Color', ' color')} to ${value}.`,
+            },
+          ]);
+        } else {
+          setChatMessages([
+            ...newMessages,
+            {
+              role: 'assistant',
+              content: "I couldn't find that surface to change the color.",
+            },
+          ]);
+        }
+      } else {
+        setChatMessages([
+          ...newMessages,
+          { role: 'assistant', content: data.response },
+        ]);
+      }
+    } catch (error) {
+      console.error('Error fetching from chat API:', error);
+      setChatMessages([
+        ...newMessages,
+        {
+          role: 'assistant',
+          content: 'Sorry, I encountered an error. Please try again.',
+        },
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   // Add collapsed state and navigation
@@ -498,6 +728,7 @@ export default function LayoutPage() {
                   blocks={blocks}
                   previewBlock={previewMode ? blockConfig : null}
                 />
+                <RulerRenderer rulers={rulers} preview={rulerPreview} scale={scale} />
                 <PointerLockControls ref={pointerLockRef} />
                 <InsideControls insideActive={insideActive} insidePos={insidePos} setInsidePos={setInsidePos} roomDims={roomDims} insideKeys={insideKeys} />
                 {/* Move camera in render loop */}
@@ -530,6 +761,14 @@ export default function LayoutPage() {
                   hideFloor={view === 'bottomup'}
                   blocks={blocks}
                   previewBlock={previewMode ? blockConfig : null}
+                />
+                <RulerRenderer rulers={rulers} preview={rulerPreview} scale={scale} />
+                <SceneEvents
+                  rulerMode={rulerMode}
+                  rulerStartPoint={rulerStartPoint}
+                  setRulerStartPoint={setRulerStartPoint}
+                  setRulers={setRulers}
+                  setRulerPreview={setRulerPreview}
                 />
                 <OrbitControls
                   enablePan={false}
@@ -975,6 +1214,48 @@ export default function LayoutPage() {
                       <div>
                         <h3 style={{ margin: "0 0 16px", fontSize: 16, fontWeight: 600, color: "#111827" }}>Builder Tools</h3>
                         
+                        <div style={{ marginBottom: 16 }}>
+                          <button
+                            onClick={() => setRulerMode(!rulerMode)}
+                            style={{
+                              width: "100%",
+                              background: rulerMode ? "#10b981" : "#f9fafb",
+                              color: rulerMode ? "#ffffff" : "#6b7280",
+                              border: "1px solid " + (rulerMode ? "#10b981" : "#e5e7eb"),
+                              borderRadius: 8,
+                              padding: "12px 16px",
+                              fontSize: 13,
+                              fontWeight: 600,
+                              cursor: "pointer",
+                              transition: "all 0.2s ease"
+                            }}
+                          >
+                            Ruler Mode {rulerMode ? 'ON' : 'OFF'}
+                          </button>
+                        </div>
+
+                        {rulerMode && (
+                          <div style={{ marginBottom: 16 }}>
+                            <button
+                              onClick={() => setRulers([])}
+                              style={{
+                                width: "100%",
+                                background: "#fef2f2",
+                                color: "#dc2626",
+                                border: "1px solid #fecaca",
+                                borderRadius: 8,
+                                padding: "12px 16px",
+                                fontSize: 13,
+                                fontWeight: 600,
+                                cursor: "pointer",
+                                transition: "all 0.2s ease"
+                              }}
+                            >
+                              Clear Rulers
+                            </button>
+                          </div>
+                        )}
+
                         {/* Builder Mode Toggle */}
                         <div style={{ marginBottom: 16 }}>
                           <button
@@ -1550,6 +1831,143 @@ export default function LayoutPage() {
                   </>
                 )}
               </div>
+          </div>
+
+          {/* Right Chatbot Panel */}
+          <div
+            style={{
+              position: "fixed",
+              top: 0,
+              right: 0,
+              width: chatbotOpen ? 320 : 60,
+              height: "100vh",
+              background: "#ffffff",
+              borderLeft: "1px solid #e5e7eb",
+              transition: "width 0.3s ease",
+              zIndex: 99999,
+              display: "flex",
+              flexDirection: "column",
+              fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+            }}
+          >
+            <div
+              style={{
+                padding: "12px 16px",
+                borderBottom: "1px solid #e5e7eb",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: chatbotOpen ? "space-between" : "center",
+              }}
+            >
+              {chatbotOpen && (
+                <h2
+                  style={{
+                    margin: 0,
+                    fontSize: 18,
+                    fontWeight: 600,
+                    color: "#111827",
+                  }}
+                >
+                  AI Assistant
+                </h2>
+              )}
+              <button
+                onClick={() => setChatbotOpen(!chatbotOpen)}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  padding: "8px",
+                  cursor: "pointer",
+                  color: "#6b7280",
+                  fontSize: 16,
+                }}
+              >
+                {chatbotOpen ? "→" : "←"}
+              </button>
+            </div>
+            {chatbotOpen && (
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+                <div style={{ flex: 1, padding: "16px", overflowY: "auto" }}>
+                  {chatMessages.map((msg, index) => (
+                    <div
+                      key={index}
+                      style={{
+                        marginBottom: "12px",
+                        textAlign: msg.role === "user" ? "right" : "left",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "inline-block",
+                          padding: "8px 12px",
+                          borderRadius: "12px",
+                          background: msg.role === "user" ? "#3b82f6" : "#f3f4f6",
+                          color: msg.role === "user" ? "#ffffff" : "#111827",
+                          maxWidth: "90%",
+                          wordWrap: "break-word",
+                        }}
+                      >
+                        {msg.content}
+                      </div>
+                    </div>
+                  ))}
+                  {isLoading && (
+                    <div style={{ textAlign: "left" }}>
+                      <div
+                        style={{
+                          display: "inline-block",
+                          padding: "8px 12px",
+                          borderRadius: "12px",
+                          background: "#f3f4f6",
+                          color: "#111827",
+                        }}
+                      >
+                        Thinking...
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <form
+                  onSubmit={handleChatSubmit}
+                  style={{
+                    padding: "16px",
+                    borderTop: "1px solid #e5e7eb",
+                    display: "flex",
+                    gap: "8px",
+                  }}
+                >
+                  <input
+                    type="text"
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    placeholder="Ask me anything..."
+                    style={{
+                      flex: 1,
+                      padding: "10px 12px",
+                      borderRadius: "8px",
+                      border: "1px solid #d1d5db",
+                      fontSize: "14px",
+                    }}
+                    disabled={isLoading}
+                  />
+                  <button
+                    type="submit"
+                    style={{
+                      padding: "10px 16px",
+                      borderRadius: "8px",
+                      border: "none",
+                      background: "#3b82f6",
+                      color: "#ffffff",
+                      cursor: "pointer",
+                      opacity: isLoading ? 0.6 : 1,
+                    }}
+                    disabled={isLoading}
+                  >
+                    Send
+                  </button>
+                </form>
+              </div>
+            )}
           </div>
         </>
       )}
