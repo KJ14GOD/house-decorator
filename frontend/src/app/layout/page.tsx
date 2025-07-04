@@ -4,7 +4,7 @@ import { Canvas, useThree } from "@react-three/fiber";
 import { OrbitControls, Edges, PointerLockControls, Text } from "@react-three/drei";
 import * as THREE from 'three';
 
-function RulerDisplay({ points, scale, isPreview = false }) {
+function RulerDisplay({ points, scale, isPreview = false }: { points: [THREE.Vector3, THREE.Vector3], scale: number, isPreview?: boolean }) {
   const [start, end] = points;
   const length = start.distanceTo(end) / scale;
   const midPoint = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
@@ -15,9 +15,7 @@ function RulerDisplay({ points, scale, isPreview = false }) {
         <bufferGeometry>
           <bufferAttribute
             attach="attributes-position"
-            count={2}
-            array={new Float32Array([...start.toArray(), ...end.toArray()])}
-            itemSize={3}
+            args={[new Float32Array([...start.toArray(), ...end.toArray()]), 3]}
           />
         </bufferGeometry>
         <lineBasicMaterial color={isPreview ? "#3b82f6" : "#dc2626"} linewidth={3} />
@@ -37,10 +35,10 @@ function RulerDisplay({ points, scale, isPreview = false }) {
   );
 }
 
-function RulerRenderer({ rulers, preview, scale }) {
+function RulerRenderer({ rulers, preview, scale }: { rulers: Array<[THREE.Vector3, THREE.Vector3]>, preview: [THREE.Vector3, THREE.Vector3] | null, scale: number }) {
   return (
     <group>
-      {rulers.map((ruler, i) => (
+      {rulers.map((ruler: [THREE.Vector3, THREE.Vector3], i: number) => (
         <RulerDisplay key={i} points={ruler} scale={scale} />
       ))}
       {preview && <RulerDisplay points={preview} scale={scale} isPreview />}
@@ -553,6 +551,9 @@ export default function LayoutPage() {
   const [chatMessages, setChatMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
   const [chatInput, setChatInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [chatbotWidth, setChatbotWidth] = useState(360);
+  const [chatbotHeight, setChatbotHeight] = useState(480);
+  const chatbotRef = useRef<HTMLDivElement>(null);
 
   const handleChatSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -589,10 +590,15 @@ export default function LayoutPage() {
         }),
       });
 
-      const data = await response.json();
+      // Read as text to handle multiple JSON objects separated by commas
+      const text = await response.text();
+      let data: any = null;
+      let summaryMsgs: string[] = [];
+      let handled = false;
 
-      if (data.action === 'change_color') {
-        const { target, value } = data;
+      // Helper to apply a color change action
+      const applyColorAction = (actionObj: any) => {
+        const { action, target, value } = actionObj;
         const colorSetters: { [key: string]: (color: string) => void } = {
           floorColor: setFloorColor,
           ceilingColor: setCeilingColor,
@@ -601,29 +607,142 @@ export default function LayoutPage() {
           wallLeftColor: setWallLeftColor,
           wallRightColor: setWallRightColor,
         };
-
-        if (colorSetters[target]) {
-          colorSetters[target](value);
-          setChatMessages([
-            ...newMessages,
-            {
-              role: 'assistant',
-              content: `I've changed the ${target.replace('Color', ' color')} to ${value}.`,
-            },
-          ]);
-        } else {
-          setChatMessages([
-            ...newMessages,
-            {
-              role: 'assistant',
-              content: "I couldn't find that surface to change the color.",
-            },
-          ]);
+        if (action === 'change_color') {
+          if (colorSetters[target]) {
+            colorSetters[target](value);
+            return `Changed ${target.replace('Color', ' color')} to ${value}.`;
+          } else {
+            // Try to match to block names (case-insensitive, partial match)
+            let found = false;
+            setBlocks(prevBlocks => prevBlocks.map(block => {
+              if (
+                block.name.toLowerCase().includes(target.toLowerCase()) ||
+                target.toLowerCase().includes(block.name.toLowerCase())
+              ) {
+                found = true;
+                return { ...block, color: value };
+              }
+              return block;
+            }));
+            if (found) {
+              return `Changed color of object(s) matching "${target}" to ${value}.`;
+            } else {
+              return `Couldn't find object matching "${target}".`;
+            }
+          }
+        } else if (action === 'move_object') {
+          // Move object(s) by updating x, y, z
+          let found = false;
+          setBlocks(prevBlocks => prevBlocks.map(block => {
+            if (
+              block.name.toLowerCase().includes(target.toLowerCase()) ||
+              target.toLowerCase().includes(block.name.toLowerCase())
+            ) {
+              found = true;
+              // Send debug info to terminal
+              console.log('Moving logic hit')
+              fetch('/api/move-debug', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  blockName: block.name,
+                  old: { x: block.x, y: block.y, z: block.z },
+                  new: { x: value.x, y: value.y, z: value.z },
+                  matched: true
+                })
+              });
+              return { ...block, x: value.x, y: value.y, z: value.z };
+            }
+            console.log('Moving logic hit 2')
+            return block;
+          }));
+          if (!found) {
+            // Send debug info for not found
+            fetch('/api/move-debug', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                target,
+                matched: false
+              })
+            });
+            return `Couldn't find object matching "${target}" to move.`;
+          }
+          return `Moved object(s) matching "${target}" to (${value.x}, ${value.y}, ${value.z}).`;
         }
-      } else {
+        return '';
+      };
+
+      // Try to parse as JSON (object or array)
+      try {
+        data = JSON.parse(text);
+        // If the response is an object with a 'response' field containing actions as a string
+        if (data && typeof data === 'object' && typeof data.response === 'string') {
+          const responseText = data.response;
+          try {
+            // Try to parse as JSON (object or array)
+            const responseData = JSON.parse(responseText);
+            if (Array.isArray(responseData)) {
+              handled = true;
+              responseData.forEach((actionObj: any) => {
+                summaryMsgs.push(applyColorAction(actionObj));
+              });
+            } else if (typeof responseData === 'object' && (responseData.action === 'change_color' || responseData.action === 'move_object')) {
+              handled = true;
+              summaryMsgs.push(applyColorAction(responseData));
+            }
+          } catch {
+            // Not valid JSON, try to parse multiple objects separated by commas
+            try {
+              const objects = responseText.split('},').map((s: string, i: number, arr: string[]) =>
+                i < arr.length - 1 ? s + '}' : s
+              );
+              const parsedObjs = objects.map((objStr: string) => JSON.parse(objStr.trim().replace(/^,/, '')));
+              handled = true;
+              parsedObjs.forEach((actionObj: any) => {
+                summaryMsgs.push(applyColorAction(actionObj));
+              });
+            } catch {
+              // Not valid JSON objects, fallback
+            }
+          }
+        } else if (Array.isArray(data)) {
+          handled = true;
+          data.forEach((actionObj: any) => {
+            summaryMsgs.push(applyColorAction(actionObj));
+          });
+        } else if (typeof data === 'object' && data !== null && (data.action === 'change_color' || data.action === 'move_object')) {
+          handled = true;
+          summaryMsgs.push(applyColorAction(data));
+        }
+      } catch {
+        // Not valid JSON, try to parse multiple objects separated by commas
+        try {
+          const objects = text.split('},').map((s: string, i: number, arr: string[]) =>
+            i < arr.length - 1 ? s + '}' : s
+          );
+          const parsedObjs = objects.map((objStr: string) => JSON.parse(objStr.trim().replace(/^,/, '')));
+          handled = true;
+          parsedObjs.forEach((actionObj: any) => {
+            summaryMsgs.push(applyColorAction(actionObj));
+          });
+        } catch {
+          // Not valid JSON objects, fallback
+        }
+      }
+      if (handled && summaryMsgs.length > 0) {
         setChatMessages([
           ...newMessages,
-          { role: 'assistant', content: data.response },
+          {
+            role: 'assistant',
+            content: summaryMsgs.join(' '),
+          },
+        ]);
+      } else {
+        // Fallback to previous logic
+        setChatMessages([
+          ...newMessages,
+          { role: 'assistant', content: text },
         ]);
       }
     } catch (error) {
@@ -1833,140 +1952,281 @@ export default function LayoutPage() {
               </div>
           </div>
 
-          {/* Right Chatbot Panel */}
+          {/* Notion-style AI Assistant */}
           <div
             style={{
-              position: "fixed",
-              top: 0,
-              right: 0,
-              width: chatbotOpen ? 320 : 60,
-              height: "100vh",
-              background: "#ffffff",
-              borderLeft: "1px solid #e5e7eb",
-              transition: "width 0.3s ease",
-              zIndex: 99999,
-              display: "flex",
-              flexDirection: "column",
               fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+              position: "absolute",
+              bottom: "24px",
+              right: "24px",
+              zIndex: 99999,
             }}
           >
-            <div
-              style={{
-                padding: "12px 16px",
-                borderBottom: "1px solid #e5e7eb",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: chatbotOpen ? "space-between" : "center",
-              }}
-            >
-              {chatbotOpen && (
-                <h2
-                  style={{
-                    margin: 0,
-                    fontSize: 18,
-                    fontWeight: 600,
-                    color: "#111827",
-                  }}
-                >
-                  AI Assistant
-                </h2>
-              )}
-              <button
-                onClick={() => setChatbotOpen(!chatbotOpen)}
+            {chatbotOpen && (
+              <div
+                ref={chatbotRef}
                 style={{
-                  background: "transparent",
-                  border: "none",
-                  padding: "8px",
-                  cursor: "pointer",
-                  color: "#6b7280",
-                  fontSize: 16,
+                  width: chatbotWidth,
+                  height: chatbotHeight,
+                  minWidth: "300px",
+                  minHeight: "300px",
+                  background: "#ffffff",
+                  borderRadius: "12px",
+                  boxShadow: "0 4px 20px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.04)",
+                  border: "1px solid #e5e7eb",
+                  display: "flex",
+                  flexDirection: "column",
+                  marginBottom: "12px",
+                  overflow: "hidden",
+                  position: "fixed",
+                  right: "24px",
+                  bottom: "24px",
+                  top: "unset",
+                  left: "unset",
+                  zIndex: 99999,
                 }}
               >
-                {chatbotOpen ? "→" : "←"}
-              </button>
-            </div>
-            {chatbotOpen && (
-              <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-                <div style={{ flex: 1, padding: "16px", overflowY: "auto" }}>
-                  {chatMessages.map((msg, index) => (
+                {/* Resize Handle */}
+                <div
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "16px",
+                    height: "16px",
+                    cursor: "nwse-resize",
+                    zIndex: 10,
+                    background: "transparent",
+                  }}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const startWidth = chatbotWidth;
+                    const startHeight = chatbotHeight;
+                    const startX = e.clientX;
+                    const startY = e.clientY;
+
+                    const handleMouseMove = (e: MouseEvent) => {
+                      e.preventDefault();
+                      const deltaX = startX - e.clientX;
+                      const deltaY = startY - e.clientY;
+                      const newWidth = Math.max(300, Math.min(600, startWidth + deltaX));
+                      const newHeight = Math.max(300, Math.min(600, startHeight + deltaY));
+                      setChatbotWidth(newWidth);
+                      setChatbotHeight(newHeight);
+                    };
+
+                    const handleMouseUp = () => {
+                      document.removeEventListener("mousemove", handleMouseMove);
+                      document.removeEventListener("mouseup", handleMouseUp);
+                    };
+
+                    document.addEventListener("mousemove", handleMouseMove);
+                    document.addEventListener("mouseup", handleMouseUp);
+                  }}
+                />
+                {/* Header */}
+                <div
+                  style={{
+                    padding: "14px 20px 10px 20px",
+                    borderBottom: "1px solid #e5e7eb",
+                    background: "#fafafa",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "10px",
+                  }}
+                >
+                  <span style={{ fontSize: 20, marginRight: 6 }}>✨</span>
+                  <span style={{ fontWeight: 600, fontSize: 15, color: "#222" }}>Decorator AI</span>
+                  <span style={{ fontSize: 12, color: "#9ca3af", marginLeft: "auto" }}></span>
+                  <button
+                    onClick={() => setChatbotOpen(false)}
+                    style={{
+                      marginLeft: 10,
+                      background: "none",
+                      border: "none",
+                      color: "#9ca3af",
+                      fontSize: 18,
+                      cursor: "pointer",
+                      borderRadius: 6,
+                      padding: 4,
+                      transition: "background 0.15s"
+                    }}
+                    title="Close"
+                  >
+                    ×
+                  </button>
+                </div>
+                {/* Chat Messages */}
+                <div
+                  style={{
+                    flex: 1,
+                    overflowY: "auto",
+                    padding: "16px 20px",
+                    background: "#fafafa",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "12px"
+                  }}
+                >
+                  {chatMessages.length === 0 && (
+                    <div style={{ color: "#9ca3af", fontSize: 14, textAlign: "center", marginTop: 40 }}>
+                      Ask me anything about your room design!
+                    </div>
+                  )}
+                  {chatMessages.map((msg, i) => (
                     <div
-                      key={index}
+                      key={i}
                       style={{
-                        marginBottom: "12px",
-                        textAlign: msg.role === "user" ? "right" : "left",
+                        alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                        background: msg.role === 'user' ? '#e0e7ef' : '#fff',
+                        color: '#222',
+                        borderRadius: 8,
+                        padding: '10px 14px',
+                        maxWidth: '80%',
+                        fontSize: 14,
+                        boxShadow: msg.role === 'assistant' ? '0 1px 4px rgba(0,0,0,0.04)' : 'none',
+                        border: msg.role === 'assistant' ? '1px solid #e5e7eb' : 'none',
+                        marginBottom: 2
                       }}
                     >
-                      <div
-                        style={{
-                          display: "inline-block",
-                          padding: "8px 12px",
-                          borderRadius: "12px",
-                          background: msg.role === "user" ? "#3b82f6" : "#f3f4f6",
-                          color: msg.role === "user" ? "#ffffff" : "#111827",
-                          maxWidth: "90%",
-                          wordWrap: "break-word",
-                        }}
-                      >
-                        {msg.content}
-                      </div>
+                      {msg.content}
                     </div>
                   ))}
                   {isLoading && (
-                    <div style={{ textAlign: "left" }}>
-                      <div
-                        style={{
-                          display: "inline-block",
-                          padding: "8px 12px",
-                          borderRadius: "12px",
-                          background: "#f3f4f6",
-                          color: "#111827",
-                        }}
-                      >
-                        Thinking...
-                      </div>
+                    <div style={{
+                      borderRadius: "8px",
+                      background: "#f9fafb",
+                      color: "#6b7280",
+                      fontSize: "13px",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "8px",
+                      padding: "10px 14px",
+                      marginTop: 4,
+                      maxWidth: '60%',
+                    }}>
+                      <div style={{ fontSize: "12px" }}>⋯</div>
+                      <div>Thinking</div>
                     </div>
                   )}
                 </div>
+                {/* Input */}
                 <form
                   onSubmit={handleChatSubmit}
                   style={{
-                    padding: "16px",
+                    padding: "16px 20px",
+                    background: "#ffffff",
                     borderTop: "1px solid #e5e7eb",
-                    display: "flex",
-                    gap: "8px",
                   }}
                 >
-                  <input
-                    type="text"
-                    value={chatInput}
-                    onChange={(e) => setChatInput(e.target.value)}
-                    placeholder="Ask me anything..."
-                    style={{
-                      flex: 1,
-                      padding: "10px 12px",
-                      borderRadius: "8px",
-                      border: "1px solid #d1d5db",
-                      fontSize: "14px",
-                    }}
-                    disabled={isLoading}
-                  />
-                  <button
-                    type="submit"
-                    style={{
-                      padding: "10px 16px",
-                      borderRadius: "8px",
-                      border: "none",
-                      background: "#3b82f6",
-                      color: "#ffffff",
-                      cursor: "pointer",
-                      opacity: isLoading ? 0.6 : 1,
-                    }}
-                    disabled={isLoading}
-                  >
-                    Send
-                  </button>
+                  <div style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 0,
+                    position: "relative",
+                  }}>
+                    <input
+                      type="text"
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      placeholder="Ask about your room design..."
+                      style={{
+                        flex: 1,
+                        padding: "14px 20px",
+                        borderRadius: "999px",
+                        border: "1.5px solid #e5e7eb",
+                        fontSize: "15px",
+                        outline: "none",
+                        background: "#f9fafb",
+                        color: "#222",
+                        boxShadow: "none",
+                        transition: "border-color 0.15s, box-shadow 0.15s",
+                        marginRight: "-44px", // overlap the button
+                        zIndex: 1,
+                      }}
+                      onFocus={(e) => {
+                        e.target.style.borderColor = "#facc15";
+                        e.target.style.boxShadow = "0 0 0 2px rgba(250,204,21,0.15)";
+                      }}
+                      onBlur={(e) => {
+                        e.target.style.borderColor = "#e5e7eb";
+                        e.target.style.boxShadow = "none";
+                      }}
+                      disabled={isLoading}
+                    />
+                    <button
+                      type="submit"
+                      disabled={isLoading || !chatInput.trim()}
+                      style={{
+                        width: "40px",
+                        height: "40px",
+                        borderRadius: "50%",
+                        background: isLoading || !chatInput.trim() ? "#fef08a" : "#facc15",
+                        border: "none",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        position: "relative",
+                        right: "8px",
+                        boxShadow: isLoading || !chatInput.trim() ? "none" : "0 2px 8px rgba(250,204,21,0.10)",
+                        cursor: isLoading || !chatInput.trim() ? "not-allowed" : "pointer",
+                        transition: "background 0.15s, box-shadow 0.15s",
+                        zIndex: 2,
+                      }}
+                      tabIndex={-1}
+                      onMouseEnter={e => {
+                        if (!(isLoading || !chatInput.trim())) {
+                          e.currentTarget.style.background = "#fde047";
+                        }
+                      }}
+                      onMouseLeave={e => {
+                        if (!(isLoading || !chatInput.trim())) {
+                          e.currentTarget.style.background = "#facc15";
+                        }
+                      }}
+                    >
+                      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M4 10H16M16 10L11 5M16 10L11 15" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </button>
+                  </div>
                 </form>
               </div>
+            )}
+
+            {/* Chat Button */}
+            {!chatbotOpen && (
+              <button
+                onClick={() => setChatbotOpen(true)}
+                style={{
+                  width: "48px",
+                  height: "48px",
+                  borderRadius: "12px",
+                  background: "#ffffff",
+                  border: "1px solid #e5e7eb",
+                  color: "#6b7280",
+                  cursor: "pointer",
+                  fontSize: "18px",
+                  boxShadow: "0 4px 20px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.04)",
+                  transition: "all 0.15s ease",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = "translateY(-1px)";
+                  e.currentTarget.style.boxShadow = "0 6px 25px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.04)";
+                  e.currentTarget.style.color = "#374151";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = "translateY(0)";
+                  e.currentTarget.style.boxShadow = "0 4px 20px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.04)";
+                  e.currentTarget.style.color = "#6b7280";
+                }}
+              >
+                ✨
+              </button>
             )}
           </div>
         </>
