@@ -1,8 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+// Use environment variable for OpenAI API key
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+
+if (!OPENAI_API_KEY) {
+  throw new Error('OPENAI_API_KEY is not set in environment variables');
+}
+
+export const runtime = 'edge';
+
 export async function POST(req: NextRequest) {
   try {
-    const { prompt, roomState } = await req.json();
+    const { prompt, roomState, messages: _messages } = await req.json();
 
     if (!prompt || !roomState) {
       return NextResponse.json({ message: 'Prompt and roomState are required' }, { status: 400 });
@@ -78,6 +87,41 @@ Available Actions:
      "value": { "x": 0, "y": 0, "z": 0 }
    }
 
+3. Add an object: If the user asks to add an object, respond with a JSON object to add a new object to the room.
+   - Action: 'add_object'
+   - Target: The object's name. Must be one of: 'Single Bed', 'Double Bed', 'King Bed', 'Nightstand', 'Dresser', 'Sofa', 'Coffee Table', 'TV Stand', 'Armchair', 'Dining Table', 'Dining Chair', 'Kitchen Island', 'Refrigerator', 'Desk', 'Office Chair', 'Bookshelf', 'Door', 'Window'.
+   - Value: An object with the x, y, z coordinates (e.g., { x: 2, y: 0, z: 4 }).
+
+   Example User Prompt: "Add a new armchair at x=3, y=0, z=5."
+   Example AI Response:
+   {
+     "action": "add_object",
+     "target": "armchair",
+     "value": { "x": 3, "y": 0, "z": 5 }
+   }
+
+4. Remove an object: If the user asks to remove an object, respond with a JSON object to remove an existing object from the room.
+   - Action: 'remove_object'
+   - Target: The name of the object to remove (case-insensitive match to block.name).
+
+   Example User Prompt: "Remove the sofa."
+   Example AI Response:
+   {
+     "action": "remove_object",
+     "target": "sofa"
+   }
+
+5. Set room dimensions: If the user asks to set the room dimensions, respond with a JSON object to update the width, length, and height of the room.
+   - Action: 'set_room_dimensions'
+   - Value: An object with the new width, length, and height in feet (e.g., { width: 10, length: 12, height: 8 }).
+
+   Example User Prompt: "Make the room 10 feet wide, 12 feet long, and 8 feet high."
+   Example AI Response:
+   {
+     "action": "set_room_dimensions",
+     "value": { "width": 10, "length": 12, "height": 8 }
+   }
+
 Guidelines:
 
 - If the user's request is a simple greeting (e.g., "Hi", "Hello"), respond with a friendly greeting.
@@ -95,7 +139,7 @@ Guidelines:
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer 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`,
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
       },
       body: JSON.stringify({
         model: 'gpt-4',
@@ -119,12 +163,23 @@ User Request: ${prompt}` },
     const data = await response.json();
     const aiResponse = data.choices[0].message.content;
 
-    try {
-      const jsonResponse = JSON.parse(aiResponse);
-      return NextResponse.json(jsonResponse);
-    } catch (e) {
-      return NextResponse.json({ response: aiResponse });
+    // Check if the response is likely JSON
+    if (aiResponse.trim().startsWith('{') || aiResponse.trim().startsWith('[')) {
+      try {
+        const jsonResponse = JSON.parse(aiResponse);
+        return NextResponse.json(jsonResponse);
+      } catch (_e) {
+        // Not valid JSON, so return as plain text
+        return new NextResponse(aiResponse, {
+          headers: { 'Content-Type': 'text/plain' },
+        });
+      }
     }
+
+    // If not JSON, return as plain text
+    return new NextResponse(aiResponse, {
+      headers: { 'Content-Type': 'text/plain' },
+    });
   } catch (error) {
     console.error('Server-side Error:', error);
     return NextResponse.json({ message: 'Internal Server Error' }, { status: 500 });

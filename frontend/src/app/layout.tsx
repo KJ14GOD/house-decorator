@@ -1,5 +1,10 @@
 import "./globals.css";
 import type { Metadata } from "next";
+import { Inter } from "next/font/google";
+import { AuthProvider } from "@/context/AuthContext";
+import Navbar from "@/components/Navbar";
+
+const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "Company | AI Home Decor",
@@ -22,8 +27,12 @@ export default function RootLayout({
           background: "#fdfdfb",
           fontFamily: 'FamilyFont, FamilyFont Fallback, sans-serif',
         }}
+        className={inter.className}
       >
-        {children}
+        <AuthProvider>
+          <Navbar />
+          {children}
+        </AuthProvider>
       </body>
     </html>
   );
