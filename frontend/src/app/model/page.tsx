@@ -579,6 +579,63 @@ export default function ModelPage() {
   const [chatbotHeight, setChatbotHeight] = useState(480);
   const chatbotRef = useRef<HTMLDivElement>(null);
 
+  // Simple debounce utility function
+  const debounce = (func: Function, delay: number) => {
+    let timeoutId: NodeJS.Timeout;
+    return (...args: any[]) => {
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => func.apply(null, args), delay);
+    };
+  };
+
+  // Debounced function to update room in Firestore
+  const updateRoomInFirestore = useCallback(
+    debounce(async (roomData: any) => {
+      if (!roomId) return;
+      
+      try {
+        const roomRef = doc(db, "rooms", roomId);
+        await updateDoc(roomRef, roomData);
+        console.log("Room state saved to Firestore");
+      } catch (error) {
+        console.error("Error saving room state to Firestore:", error);
+      }
+    }, 1000),
+    [roomId]
+  );
+
+  // Effect to persist room state changes to Firestore
+  useEffect(() => {
+    if (!isLoaded || !roomId) return;
+
+    // Prepare sanitized blocks (remove Date objects for Firestore)
+    const sanitizedBlocks = blocks.map(block => {
+      const { created, ...rest } = block;
+      return rest;
+    });
+
+    const roomData = {
+      name: roomName,
+      width,
+      length,
+      height,
+      floorColor,
+      ceilingColor,
+      wallFrontColor,
+      wallBackColor,
+      wallLeftColor,
+      wallRightColor,
+      blocks: sanitizedBlocks,
+      chatHistory: chatMessages,
+    };
+
+    updateRoomInFirestore(roomData);
+  }, [
+    isLoaded, roomId, roomName, width, length, height,
+    floorColor, ceilingColor, wallFrontColor, wallBackColor, 
+    wallLeftColor, wallRightColor, blocks, chatMessages, updateRoomInFirestore
+  ]);
+
   const handleChatSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!chatInput.trim() || isLoading) return;

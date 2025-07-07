@@ -2,7 +2,16 @@
 
 export default function Home() {
   return (
-    <div style={{ minHeight: "100vh", background: "#fdfdfb", color: "#222" }}>
+    <div style={{ 
+      minHeight: "100vh", 
+      background: `
+        radial-gradient(circle at 40% 90%, rgba(255, 69, 0, 0.8) 0%, transparent 60%),
+        radial-gradient(circle at 75% 85%, rgba(239, 68, 68, 0.6) 0%, transparent 50%),
+        radial-gradient(circle at 60% 100%, rgba(59, 130, 246, 0.4) 0%, transparent 70%),
+        #f8fafc
+      `, 
+      color: "#222" 
+    }}>
 
       {/* Main Content */}
       <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "flex-start", maxWidth: 800, margin: "0 auto", padding: "96px 32px 0 32px", minHeight: "80vh" }}>

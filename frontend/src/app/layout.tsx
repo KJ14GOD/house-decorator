@@ -24,7 +24,12 @@ export default function RootLayout({
       </head>
       <body
         style={{
-          background: "#fdfdfb",
+          background: `
+            radial-gradient(circle at 40% 90%, rgba(255, 69, 0, 0.8) 0%, transparent 60%),
+            radial-gradient(circle at 75% 85%, rgba(239, 68, 68, 0.6) 0%, transparent 50%),
+            radial-gradient(circle at 60% 100%, rgba(59, 130, 246, 0.4) 0%, transparent 70%),
+            #f8fafc
+          `,
           fontFamily: 'FamilyFont, FamilyFont Fallback, sans-serif',
         }}
         className={inter.className}

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import * as THREE from 'three';
-import { ChevronUp, ChevronDown, X, Pencil, Trash2, Search, Check } from 'lucide-react';
+import { ChevronUp, ChevronDown, X, Pencil, Trash2, Search, Check, Folder, ChevronRight } from 'lucide-react';
 import { useAuth } from "@/context/AuthContext";
 import { db } from "@/lib/firebase/firebase";
 import { collection, addDoc, query, where, getDocs, serverTimestamp, doc, updateDoc, deleteDoc } from "firebase/firestore";
@@ -102,19 +102,34 @@ export default function LayoutPage() {
     created: Date
   }>>([]);
   
-  const [chatMessages, setChatMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([]);
+  type ChatMessage = {
+    role: 'user' | 'assistant';
+    content: string | { type: 'room_list'; rooms: any[]; preamble: string; };
+  };
+
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   
   useEffect(() => {
     const fetchSavedModels = async () => {
-      if (user) {
-        const q = query(collection(db, "rooms"), where("userId", "==", user.uid));
+      if (!user) {
+        setSavedModels([]);
+        return;
+      }
+      setIsLoading(true);
+      const q = query(collection(db, "rooms"), where("userId", "==", user.uid));
+      try {
         const querySnapshot = await getDocs(q);
         const models = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         setSavedModels(models);
+      } catch (error) {
+        console.error("Error fetching saved models: ", error);
+      } finally {
+        setIsLoading(false);
       }
     };
+
     fetchSavedModels();
   }, [user]);
 
@@ -165,22 +180,96 @@ export default function LayoutPage() {
       const docRef = await addDoc(collection(db, "rooms"), dataToSave);
       console.log("Document written with ID: ", docRef.id);
       setSavedModels(prev => [{ id: docRef.id, ...roomData }, ...prev]);
+      return docRef.id; // Return the new document ID
     } catch (e) {
       console.error("Error adding document: ", e);
+      return null;
     }
   };
 
-  const handleChatSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const applyActionToState = (actionObj: any, currentState: any) => {
+    const { action, target, value } = actionObj;
+
+    let {
+      width,
+      length,
+      height,
+      floorColor,
+      ceilingColor,
+      wallFrontColor,
+      wallBackColor,
+      wallLeftColor,
+      wallRightColor,
+      blocks
+    } = currentState;
+
+    if (action === 'set_room_dimensions') {
+      width = value.width;
+      length = value.length;
+      height = value.height;
+    } else if (action === 'change_color') {
+      const colorSetters: { [key: string]: (c: string) => void } = {
+        floorColor: (c: string) => floorColor = c,
+        ceilingColor: (c: string) => ceilingColor = c,
+        wallFrontColor: (c: string) => wallFrontColor = c,
+        wallBackColor: (c: string) => wallBackColor = c,
+        wallLeftColor: (c: string) => wallLeftColor = c,
+        wallRightColor: (c: string) => wallRightColor = c,
+      };
+      if (colorSetters[target]) {
+        colorSetters[target](value);
+      } else {
+        blocks = blocks.map((block: any) => {
+          if (block.name.toLowerCase().includes(target.toLowerCase()) || target.toLowerCase().includes(block.name.toLowerCase())) {
+            return { ...block, color: value };
+          }
+          return block;
+        });
+      }
+    } else if (action === 'move_object') {
+      blocks = blocks.map((block: any) => {
+        if (block.name.toLowerCase().includes(target.toLowerCase()) || target.toLowerCase().includes(block.name.toLowerCase())) {
+          return { ...block, x: value.x, y: value.y, z: value.z };
+        }
+        return block;
+      });
+    } else if (action === 'add_object') {
+      const libraryItem = libraryItems.find(item => item.name.toLowerCase() === target.toLowerCase());
+      if (libraryItem) {
+        const newBlock = {
+          id: `block_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          name: libraryItem.name,
+          x: value.x,
+          y: value.y,
+          z: value.z,
+          width: libraryItem.width,
+          height: libraryItem.height,
+          depth: libraryItem.depth,
+          color: libraryItem.color,
+          created: new Date(),
+        };
+        blocks = [...blocks, newBlock];
+      }
+    } else if (action === 'remove_object') {
+      blocks = blocks.filter((block:any) => {
+        const match = block.name.toLowerCase().includes(target.toLowerCase()) || target.toLowerCase().includes(block.name.toLowerCase());
+        return !match;
+      });
+    } 
+
+    return { width, length, height, floorColor, ceilingColor, wallFrontColor, wallBackColor, wallLeftColor, wallRightColor, blocks };
+  };
+
+  const submitMessage = async (message: string) => {
     if (!user) {
       setShowAuthModal(true);
       return;
     }
-    if (!chatInput.trim() || isLoading) return;
+    if (!message.trim() || isLoading) return;
 
-    const newMessages: Array<{ role: 'user' | 'assistant'; content: string }> = [
+    const newMessages: ChatMessage[] = [
       ...chatMessages,
-      { role: 'user', content: chatInput },
+      { role: 'user', content: message },
     ];
     setChatMessages(newMessages);
     const currentBlocks = blocks;
@@ -192,13 +281,16 @@ export default function LayoutPage() {
     setIsLoading(true);
 
     try {
+      const timezoneOffset = new Date().getTimezoneOffset();
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          prompt: chatInput,
+          prompt: message,
+          userId: user?.uid,
+          timezoneOffset,
           roomState: {
             width: currentWidth,
             length: currentLength,
@@ -216,83 +308,23 @@ export default function LayoutPage() {
       });
 
       const text = await response.text();
-
-      const applyActionToState = (actionObj: any, currentState: any) => {
-        const { action, target, value } = actionObj;
-
-        let {
-          width,
-          length,
-          height,
-          floorColor,
-          ceilingColor,
-          wallFrontColor,
-          wallBackColor,
-          wallLeftColor,
-          wallRightColor,
-          blocks
-        } = currentState;
-
-        if (action === 'set_room_dimensions') {
-          width = value.width;
-          length = value.length;
-          height = value.height;
-        } else if (action === 'change_color') {
-          const colorSetters: { [key: string]: (c: string) => void } = {
-            floorColor: (c: string) => floorColor = c,
-            ceilingColor: (c: string) => ceilingColor = c,
-            wallFrontColor: (c: string) => wallFrontColor = c,
-            wallBackColor: (c: string) => wallBackColor = c,
-            wallLeftColor: (c: string) => wallLeftColor = c,
-            wallRightColor: (c: string) => wallRightColor = c,
-          };
-          if (colorSetters[target]) {
-            colorSetters[target](value);
-          } else {
-            blocks = blocks.map((block: any) => {
-              if (block.name.toLowerCase().includes(target.toLowerCase()) || target.toLowerCase().includes(block.name.toLowerCase())) {
-                return { ...block, color: value };
-              }
-              return block;
-            });
-          }
-        } else if (action === 'move_object') {
-          blocks = blocks.map((block: any) => {
-            if (block.name.toLowerCase().includes(target.toLowerCase()) || target.toLowerCase().includes(block.name.toLowerCase())) {
-              return { ...block, x: value.x, y: value.y, z: value.z };
-            }
-            return block;
-          });
-        } else if (action === 'add_object') {
-          const libraryItem = libraryItems.find(item => item.name.toLowerCase() === target.toLowerCase());
-          if (libraryItem) {
-            const newBlock = {
-              id: `block_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-              name: libraryItem.name,
-              x: value.x,
-              y: value.y,
-              z: value.z,
-              width: libraryItem.width,
-              height: libraryItem.height,
-              depth: libraryItem.depth,
-              color: libraryItem.color,
-              created: new Date(),
-            };
-            blocks = [...blocks, newBlock];
-          }
-        } else if (action === 'remove_object') {
-          blocks = blocks.filter((block:any) => {
-            const match = block.name.toLowerCase().includes(target.toLowerCase()) || target.toLowerCase().includes(block.name.toLowerCase());
-            return !match;
-          });
-        }
-
-        return { width, length, height, floorColor, ceilingColor, wallFrontColor, wallBackColor, wallLeftColor, wallRightColor, blocks };
-      };
-
+      
       try {
-        const data = JSON.parse(text);
-        
+        const data = await JSON.parse(text);
+        if(data.action === 'list_rooms') {
+          setChatMessages([
+            ...newMessages,
+            { 
+              role: 'assistant', 
+              content: {
+                type: 'room_list',
+                rooms: data.rooms,
+                preamble: data.preamble,
+              } 
+            }
+          ]);
+          return;
+        }
         let initialRoomState = {
           width: width,
           length: length,
@@ -331,11 +363,14 @@ export default function LayoutPage() {
             blocks: finalRoomState.blocks,
             name: `Generated Room ${new Date().toLocaleString()}`,
           };
-          await saveRoom(roomToSave);
-          navigateToModel({
-            ...finalRoomState,
-            chatMessages: [ ...newMessages, { role: 'assistant', content: "Here is your generated room." }]
-          });
+          const newRoomId = await saveRoom(roomToSave);
+          if (newRoomId) {
+            navigateToModel({
+              id: newRoomId,
+              ...finalRoomState,
+              chatMessages: [ ...newMessages, { role: 'assistant', content: "Here is your generated room." }]
+            });
+          }
         } else {
            setChatMessages([ ...newMessages, { role: 'assistant', content: text }]);
         }
@@ -354,6 +389,12 @@ export default function LayoutPage() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleChatSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInput.trim() || isLoading) return;
+    submitMessage(chatInput);
   };
 
   // Add collapsed state and navigation
@@ -383,12 +424,12 @@ export default function LayoutPage() {
   ];
 
   // Dynamic greeting based on time
-  function getGreeting() {
+  const getGreeting = () => {
     const hour = new Date().getHours();
     if (hour < 12) return 'Good morning';
     if (hour < 18) return 'Good afternoon';
     return 'Good evening';
-  }
+  };
   const [mode, setMode] = useState<'ask' | 'build'>('ask');
 
   const sortedModels = [...savedModels]
@@ -428,10 +469,15 @@ export default function LayoutPage() {
         marginLeft: 0, 
         transition: "margin-left 0.3s ease",
         minHeight: "100vh", 
-        background: "#fdfdfb", 
+        background: `
+          radial-gradient(circle at 40% 90%, rgba(255, 69, 0, 0.8) 0%, transparent 60%),
+          radial-gradient(circle at 75% 85%, rgba(239, 68, 68, 0.6) 0%, transparent 50%),
+          radial-gradient(circle at 60% 100%, rgba(59, 130, 246, 0.4) 0%, transparent 70%),
+          #f8fafc
+        `,
         color: "#222", 
         position: "relative", 
-        overflow: "hidden" 
+        overflow: "hidden"
       }}>
       {showAuthModal && (
         <div style={{
@@ -476,7 +522,7 @@ export default function LayoutPage() {
             <button
               onClick={() => router.push('/auth')}
               style={{
-                background: '#facc15',
+                background: '#fafbfc',
                 color: '#222',
                 border: 'none',
                 borderRadius: 12,
@@ -528,9 +574,8 @@ export default function LayoutPage() {
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
-          justifyContent: 'flex-start',
-          background: '#fafbfc',
-          padding: '32px 16px 0 16px',
+          justifyContent: 'center',
+          padding: '0px 0px 200px 16px',
         }}>
           <div style={{
             display: 'flex',
@@ -599,6 +644,49 @@ export default function LayoutPage() {
               {mode === 'ask' ? (
                 <div style={{ position: 'relative', width: '100%' }}>
                   <div style={{ width: '100%', minHeight: 20, display: 'flex', flexDirection: 'column', gap: 8, justifyContent: 'flex-end', alignItems: 'flex-start', marginBottom: 24 }}>
+                    {chatMessages.length === 0 && !isLoading && (
+                      <div style={{ width: '100%', marginBottom: 32, animation: 'fadeIn 0.5s ease-in-out' }}>
+                        <p style={{ textAlign: 'center', fontSize: 14, color: '#4b5563', marginBottom: 16, fontWeight: 500 }}>Try one of these prompts</p>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                          {[
+                            "Show me my 3 most recent rooms",
+                            "Find the room named 'Living Room'",
+                            "What was the last room I made?",
+                            "List all rooms I created yesterday"
+                          ].map(prompt => (
+                            <button
+                              key={prompt}
+                              onClick={() => submitMessage(prompt)}
+                              style={{
+                                background: '#fff',
+                                border: '1px solid #e5e7eb',
+                                borderRadius: 12,
+                                padding: '12px 16px',
+                                fontSize: 14,
+                                color: '#374151',
+                                cursor: 'pointer',
+                                textAlign: 'left',
+                                fontWeight: 500,
+                                transition: 'all 0.2s',
+                                boxShadow: '0 1px 2px rgba(0,0,0,0.03)'
+                              }}
+                              onMouseEnter={(e) => {
+                                e.currentTarget.style.borderColor = '#d1d5db';
+                                e.currentTarget.style.transform = 'translateY(-2px)';
+                                e.currentTarget.style.boxShadow = '0 4px 6px rgba(0,0,0,0.05)';
+                              }}
+                              onMouseLeave={(e) => {
+                                e.currentTarget.style.borderColor = '#e5e7eb';
+                                e.currentTarget.style.transform = 'translateY(0)';
+                                e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.03)';
+                              }}
+                            >
+                              {prompt}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
                       {chatMessages.map((msg, i) => (
                         <div
@@ -617,7 +705,65 @@ export default function LayoutPage() {
                             fontWeight: 500,
                           }}
                         >
-                          {msg.content}
+                          {typeof msg.content === 'string'
+                           ? msg.content
+                           : (
+                               <div>
+                                 <p style={{ fontWeight: 500, color: '#4b5563', marginBottom: '12px' }}>
+                                   {msg.content.preamble}
+                                 </p>
+                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                   {msg.content.rooms.map((room: any) => (
+                                     <button
+                                       key={room.id}
+                                       onClick={() => navigateToModel(room)}
+                                       style={{
+                                         display: 'flex',
+                                         alignItems: 'center',
+                                         gap: '12px',
+                                         padding: '12px',
+                                         borderRadius: '10px',
+                                         background: '#f9fafb',
+                                         border: '1px solid #f3f4f6',
+                                         cursor: 'pointer',
+                                         textAlign: 'left',
+                                         transition: 'background 0.2s, border-color 0.2s',
+                                         width: '100%',
+                                       }}
+                                       onMouseEnter={(e) => {
+                                           e.currentTarget.style.background = '#f3f4f6';
+                                           e.currentTarget.style.borderColor = '#e5e7eb';
+                                       }}
+                                       onMouseLeave={(e) => {
+                                           e.currentTarget.style.background = '#f9fafb';
+                                           e.currentTarget.style.borderColor = '#f3f4f6';
+                                       }}
+                                     >
+                                       <div style={{ 
+                                           background: '#eef2ff', 
+                                           color: '#4f46e5', 
+                                           padding: '8px', 
+                                           borderRadius: '6px', 
+                                           display: 'flex', 
+                                           alignItems: 'center', 
+                                           justifyContent: 'center' 
+                                       }}>
+                                         <Folder size={20} />
+                                       </div>
+                                       <div style={{ flex: 1 }}>
+                                         <p style={{ fontWeight: 600, color: '#1f2937', margin: 0, fontSize: '15px' }}>
+                                           {room.name}
+                                         </p>
+                                         <p style={{ fontSize: '13px', color: '#6b7280', margin: '4px 0 0' }}>
+                                           {room.width} x {room.length} x {room.height} ft • Created {new Date(room.createdAt._seconds * 1000).toLocaleDateString()}
+                                         </p>
+                                       </div>
+                                       <ChevronRight size={18} color="#9ca3af" />
+                                     </button>
+                                   ))}
+                                 </div>
+                               </div>
+                             )}
                         </div>
                       ))}
                       {isLoading && (
@@ -751,11 +897,14 @@ export default function LayoutPage() {
                         wallRightColor,
                         blocks,
                       };
-                      await saveRoom(newModel);
-                      navigateToModel({
-                        ...newModel,
-                        chatMessages: [{ role: 'assistant', content: `Configured a ${width}x${length} room with ${height}ft ceilings.` }]
-                      });
+                      const newRoomId = await saveRoom(newModel);
+                      if (newRoomId) {
+                        navigateToModel({
+                          id: newRoomId,
+                          ...newModel,
+                          chatMessages: [{ role: 'assistant', content: `Configured a ${width}x${length} room with ${height}ft ceilings.` }]
+                        });
+                      }
                     }} style={{
                       width: '100%',
                       display: 'flex',
@@ -835,182 +984,183 @@ export default function LayoutPage() {
                 </>
               )}
             </div>
-            {/* Saved Models Gallery */}
-            {savedModels.length > 0 && (
-              <div style={{ 
-                width: '100%', 
-                maxWidth: 1400, 
-                marginTop: 32, 
-                padding: '24px 48px',
-                background: '#000000',
-                borderRadius: 24,
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                  <h2 style={{ fontSize: 24, fontWeight: 700, color: 'white', fontFamily: "'Inter', sans-serif", margin: 0 }}>Your Rooms</h2>
-                  <div style={{ position: 'relative' }} ref={sortDropdownRef}>
-                    <button
-                      onClick={() => setIsSortOpen(!isSortOpen)}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        width: 140,
-                        padding: '10px 14px',
-                        borderRadius: 12,
-                        border: '1px solid #e5e7eb',
-                        background: 'white',
-                        color: '#222',
-                        fontSize: 14,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <span>{sortOptions.find(opt => opt.value === sortBy)?.label}</span>
-                      <ChevronDown size={16} style={{ color: '#6b7280', transform: isSortOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} />
-                    </button>
-                    {isSortOpen && (
-                      <div
-                        style={{
-                          position: 'absolute',
-                          top: '110%',
-                          right: 0,
-                          width: '100%',
-                          background: '#000000',
-                          borderRadius: 12,
-                          zIndex: 10,
-                          padding: 8,
-                          boxShadow: '0 10px 20px rgba(0,0,0,0.15)'
-                        }}
-                      >
-                        {sortOptions.map(option => (
-                          <button
-                            key={option.value}
-                            onClick={() => {
-                              setSortBy(option.value);
-                              setIsSortOpen(false);
-                            }}
-                            style={{
-                              width: '100%',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 8,
-                              padding: '10px 12px',
-                              background: sortBy === option.value ? '#facc15' : 'transparent',
-                              border: 'none',
-                              borderRadius: 8,
-                              color: sortBy === option.value ? '#1f2937' : 'white',
-                              fontSize: 14,
-                              textAlign: 'left',
-                              cursor: 'pointer',
-                              fontWeight: sortBy === option.value ? 600 : 400,
-                            }}
-                            onMouseEnter={e => { if (sortBy !== option.value) e.currentTarget.style.background = '#27272a'; }}
-                            onMouseLeave={e => { if (sortBy !== option.value) e.currentTarget.style.background = 'transparent'; }}
-                          >
-                            <div style={{ width: 16, display: 'flex', alignItems: 'center' }}>
-                              {sortBy === option.value && <Check size={16} />}
-                            </div>
-                            <span>{option.label}</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-                <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
-                  gap: 24,
-                }}>
-                  {sortedModels.map(model => (
-                    <div key={model.id} style={{
-                      background: '#fff',
-                      borderRadius: 16,
-                      border: '1px solid #e5e7eb',
-                      boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
-                      overflow: 'hidden',
-                      cursor: 'pointer',
-                      transition: 'transform 0.2s, box-shadow 0.2s',
-                    }}
-                     onClick={() => {
-                      const roomState = {
-                        id: model.id,
-                        name: model.name,
-                        width: model.width,
-                        length: model.length,
-                        height: model.height,
-                        floorColor: model.floorColor,
-                        ceilingColor: model.ceilingColor,
-                        wallFrontColor: model.wallFrontColor,
-                        wallBackColor: model.wallBackColor,
-                        wallLeftColor: model.wallLeftColor,
-                        wallRightColor: model.wallRightColor,
-                        blocks: model.blocks || []
-                      };
-                      localStorage.setItem('roomState', JSON.stringify(roomState));
-                      router.push('/model');
-                    }}
-                     onMouseEnter={e => {
-                      e.currentTarget.style.transform = 'translateY(-4px)';
-                      e.currentTarget.style.boxShadow = '0 8px 20px rgba(0,0,0,0.08)';
-                    }}
-                    onMouseLeave={e => {
-                      e.currentTarget.style.transform = 'none';
-                      e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.05)';
-                    }}
-                    >
-                      <div style={{ height: 200, background: '#f9fafb' }}>
-                        <Canvas key={`${model.id}-${sortBy}`} camera={{ position: [0, 2, 5], fov: 50 }}>
-                          <ambientLight intensity={0.8} />
-                          <directionalLight position={[5, 10, 7]} intensity={0.8} />
-                          <RoomBoxPreview
-                            width={model.width}
-                            length={model.length}
-                            height={model.height}
-                            floorColor={model.floorColor}
-                            ceilingColor={model.ceilingColor}
-                            wallFrontColor={model.wallFrontColor}
-                            wallBackColor={model.wallBackColor}
-                            wallLeftColor={model.wallLeftColor}
-                            wallRightColor={model.wallRightColor}
-                            blocks={model.blocks}
-                          />
-                           <OrbitControls enableZoom={false} enablePan={false} autoRotate autoRotateSpeed={0.7} />
-                        </Canvas>
-                      </div>
-                      <div style={{ padding: 16 }}>
-                        {editingModelId === model.id ? (
-                          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }} onClick={(e) => e.stopPropagation()}>
-                            <input
-                              type="text"
-                              value={newModelName}
-                              onChange={(e) => setNewModelName(e.target.value)}
-                              style={{ flex: 1, padding: '8px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 14 }}
-                            />
-                            <button onClick={() => handleUpdateName(model.id)} style={{ padding: '8px 12px', borderRadius: 8, border: 'none', background: '#222', color: 'white', cursor: 'pointer' }}>Save</button>
-                            <button onClick={() => setEditingModelId(null)} style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e5e7eb', background: 'white', cursor: 'pointer' }}>Cancel</button>
-                          </div>
-                        ) : (
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <div>
-                              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: '#222' }}>{model.name}</h3>
-                              <p style={{ margin: '4px 0 0', fontSize: 13, color: '#6b7280' }}>
-                                {model.width}ft x {model.length}ft x {model.height}ft
-                              </p>
-                            </div>
-                            <div style={{ display: 'flex', gap: 8 }}>
-                              <button onClick={(e) => { e.stopPropagation(); setEditingModelId(model.id); setNewModelName(model.name); }} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#6b7280' }}><Pencil size={18} /></button>
-                              <button onClick={(e) => { e.stopPropagation(); setDeletingModelId(model.id); }} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#6b7280' }}><Trash2 size={18} /></button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
         </div>
       
+    {/* Saved Models Gallery - moved to bottom, styled like Vercel/Lovable */}
+    <div style={{
+      width: '100%',
+      maxWidth: 1400,
+      margin: '-160px auto 0 auto',
+      padding: '32px 48px 64px 48px',
+      background: '#000000',
+      borderRadius: 24,
+      minHeight: 320,
+      display: savedModels.length > 0 ? 'block' : 'none',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <h2 style={{ fontSize: 24, fontWeight: 700, color: 'white', fontFamily: "'Inter', sans-serif", margin: 0 }}>Your Rooms</h2>
+        <div style={{ position: 'relative' }} ref={sortDropdownRef}>
+          <button
+            onClick={() => setIsSortOpen(!isSortOpen)}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              width: 140,
+              padding: '10px 14px',
+              borderRadius: 12,
+              border: '1px solid #e5e7eb',
+              background: 'white',
+              color: '#222',
+              fontSize: 14,
+              cursor: 'pointer',
+            }}
+          >
+            <span>{sortOptions.find(opt => opt.value === sortBy)?.label}</span>
+            <ChevronDown size={16} style={{ color: '#6b7280', transform: isSortOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} />
+          </button>
+          {isSortOpen && (
+            <div
+              style={{
+                position: 'absolute',
+                top: '110%',
+                right: 0,
+                width: '100%',
+                background: '#000000',
+                borderRadius: 12,
+                zIndex: 10,
+                padding: 8,
+                boxShadow: '0 10px 20px rgba(0,0,0,0.15)'
+              }}
+            >
+              {sortOptions.map(option => (
+                <button
+                  key={option.value}
+                  onClick={() => {
+                    setSortBy(option.value);
+                    setIsSortOpen(false);
+                  }}
+                  style={{
+                    width: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '10px 12px',
+                    background: sortBy === option.value ? '#facc15' : 'transparent',
+                    border: 'none',
+                    borderRadius: 8,
+                    color: sortBy === option.value ? '#1f2937' : 'white',
+                    fontSize: 14,
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    fontWeight: sortBy === option.value ? 600 : 400,
+                  }}
+                  onMouseEnter={e => { if (sortBy !== option.value) e.currentTarget.style.background = '#27272a'; }}
+                  onMouseLeave={e => { if (sortBy !== option.value) e.currentTarget.style.background = 'transparent'; }}
+                >
+                  <div style={{ width: 16, display: 'flex', alignItems: 'center' }}>
+                    {sortBy === option.value && <Check size={16} />}
+                  </div>
+                  <span>{option.label}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+        gap: 24,
+      }}>
+        {sortedModels.map(model => (
+          <div key={model.id} style={{
+            background: '#fff',
+            borderRadius: 16,
+            border: '1px solid #e5e7eb',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
+            overflow: 'hidden',
+            cursor: 'pointer',
+            transition: 'transform 0.2s, box-shadow 0.2s',
+          }}
+           onClick={() => {
+            const roomState = {
+              id: model.id,
+              name: model.name,
+              width: model.width,
+              length: model.length,
+              height: model.height,
+              floorColor: model.floorColor,
+              ceilingColor: model.ceilingColor,
+              wallFrontColor: model.wallFrontColor,
+              wallBackColor: model.wallBackColor,
+              wallLeftColor: model.wallLeftColor,
+              wallRightColor: model.wallRightColor,
+              blocks: model.blocks || [],
+              chatMessages: model.chatHistory || [],
+            };
+            localStorage.setItem('roomState', JSON.stringify(roomState));
+            router.push('/model');
+          }}
+           onMouseEnter={e => {
+            e.currentTarget.style.transform = 'translateY(-4px)';
+            e.currentTarget.style.boxShadow = '0 8px 20px rgba(0,0,0,0.08)';
+          }}
+          onMouseLeave={e => {
+            e.currentTarget.style.transform = 'none';
+            e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.05)';
+          }}
+          >
+            <div style={{ height: 200, background: '#f9fafb' }}>
+              <Canvas key={`${model.id}-${sortBy}`} camera={{ position: [0, 2, 5], fov: 50 }}>
+                <ambientLight intensity={0.8} />
+                <directionalLight position={[5, 10, 7]} intensity={0.8} />
+                <RoomBoxPreview
+                  width={model.width}
+                  length={model.length}
+                  height={model.height}
+                  floorColor={model.floorColor}
+                  ceilingColor={model.ceilingColor}
+                  wallFrontColor={model.wallFrontColor}
+                  wallBackColor={model.wallBackColor}
+                  wallLeftColor={model.wallLeftColor}
+                  wallRightColor={model.wallRightColor}
+                  blocks={model.blocks}
+                />
+                 <OrbitControls enableZoom={false} enablePan={false} autoRotate autoRotateSpeed={0.7} />
+              </Canvas>
+            </div>
+            <div style={{ padding: 16 }}>
+              {editingModelId === model.id ? (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }} onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="text"
+                    value={newModelName}
+                    onChange={(e) => setNewModelName(e.target.value)}
+                    style={{ flex: 1, padding: '8px', borderRadius: 8, border: '1px solid #e5e7eb', fontSize: 14 }}
+                  />
+                  <button onClick={() => handleUpdateName(model.id)} style={{ padding: '8px 12px', borderRadius: 8, border: 'none', background: '#222', color: 'white', cursor: 'pointer' }}>Save</button>
+                  <button onClick={() => setEditingModelId(null)} style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e5e7eb', background: 'white', cursor: 'pointer' }}>Cancel</button>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: '#222' }}>{model.name}</h3>
+                    <p style={{ margin: '4px 0 0', fontSize: 13, color: '#6b7280' }}>
+                      {model.width}ft x {model.length}ft x {model.height}ft
+                    </p>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={(e) => { e.stopPropagation(); setEditingModelId(model.id); setNewModelName(model.name); }} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#6b7280' }}><Pencil size={18} /></button>
+                    <button onClick={(e) => { e.stopPropagation(); setDeletingModelId(model.id); }} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#6b7280' }}><Trash2 size={18} /></button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
     </div>
   );
 } 
