@@ -12,7 +12,7 @@ npm install
 npm run dev
 ```
 
-This will start the development server. Open the URL shown in your terminal (usually http://localhost:5173) to view the app.
+This will start the development server. Open the URL shown in your terminal (usually http://localhost:3000) to view the app.
 
 ## Next Steps
 - [ ] Create a form for entering room dimensions
