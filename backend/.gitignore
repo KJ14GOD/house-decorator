@@ -1,0 +1,4 @@
+# Ignore YOLO weights and other large files
+*.pt
+clip_server/yolov8x.pt
+clip_server/yolov8n.pt
