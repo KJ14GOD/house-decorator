@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState, useRef } from "react";
+import { usePathname } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import { auth } from "@/lib/firebase/firebase";
 import { signOut } from "firebase/auth";
@@ -9,6 +10,12 @@ import { LogOut } from 'lucide-react';
 
 export default function Navbar() {
   const { user, loading } = useAuth();
+  const pathname = usePathname();
+
+  // Hide navbar on chat page
+  if (pathname === '/chat') {
+    return null;
+  }
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const closeTimeout = useRef<NodeJS.Timeout | null>(null);
 

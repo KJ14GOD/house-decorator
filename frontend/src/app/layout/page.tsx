@@ -1,14 +1,15 @@
 "use client";
-import { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import * as THREE from 'three';
-import { ChevronUp, ChevronDown, X, Pencil, Trash2, Search, Check, Folder, ChevronRight } from 'lucide-react';
+import { ChevronUp, ChevronDown, X, Pencil, Trash2, Search, Check, Folder, ChevronRight, Info } from 'lucide-react';
 import { useAuth } from "@/context/AuthContext";
 import { db } from "@/lib/firebase/firebase";
 import { collection, addDoc, query, where, getDocs, serverTimestamp, doc, updateDoc, deleteDoc } from "firebase/firestore";
+import { analyzeAndBuildRoomModel, RoomModelResult } from '@/lib/prebuild/imageTo3D';
 
 // This is a simplified version of RoomBox for the preview cards
 function RoomBoxPreview({ width, length, height, floorColor, ceilingColor, wallFrontColor, wallBackColor, wallLeftColor, wallRightColor, blocks }: {
@@ -111,6 +112,8 @@ export default function LayoutPage() {
   const [chatInput, setChatInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   
+  const [infoPopup, setInfoPopup] = useState<{ modelId: string; message: string } | null>(null);
+
   useEffect(() => {
     const fetchSavedModels = async () => {
       if (!user) {
@@ -123,6 +126,15 @@ export default function LayoutPage() {
         const querySnapshot = await getDocs(q);
         const models = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         setSavedModels(models);
+
+        // Check for info message in localStorage
+        const infoMessage = localStorage.getItem('infoMessage');
+        if (infoMessage) {
+          const { modelId, message } = JSON.parse(infoMessage);
+          setInfoPopup({ modelId, message });
+          localStorage.removeItem('infoMessage');
+        }
+
       } catch (error) {
         console.error("Error fetching saved models: ", error);
       } finally {
@@ -134,7 +146,13 @@ export default function LayoutPage() {
   }, [user]);
 
   const navigateToModel = (roomState: any) => {
-    localStorage.setItem('roomState', JSON.stringify(roomState));
+    // Ensure chat history is properly mapped from chatHistory to chatMessages
+    const formattedRoomState = {
+      ...roomState,
+      chatMessages: roomState.chatHistory || roomState.chatMessages || [],
+      meshy_model_url: roomState.meshy_model_url || (roomState.model_data ? roomState.model_data.meshy_model_url : null),
+    };
+    localStorage.setItem('roomState', JSON.stringify(formattedRoomState));
     router.push('/model');
   };
 
@@ -174,6 +192,7 @@ export default function LayoutPage() {
       blocks: sanitizedBlocks,
       userId: user.uid,
       createdAt: serverTimestamp(),
+      meshy_model_url: roomData.meshy_model_url || null,
     };
 
     try {
@@ -430,7 +449,8 @@ export default function LayoutPage() {
     if (hour < 18) return 'Good afternoon';
     return 'Good evening';
   };
-  const [mode, setMode] = useState<'ask' | 'build'>('ask');
+  // 1. Update mode state to support 'prebuild'
+  const [mode, setMode] = useState<'ask' | 'build' | 'prebuild'>('ask');
 
   const sortedModels = [...savedModels]
     .sort((a, b) => {
@@ -463,6 +483,100 @@ export default function LayoutPage() {
     { value: 'oldest', label: 'Oldest' },
     { value: 'name', label: 'A-Z' },
   ];
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [modelLoading, setModelLoading] = useState(false);
+  const [modelError, setModelError] = useState<string | null>(null);
+  const [modelResult, setModelResult] = useState<RoomModelResult | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+
+  // Add state for prebuild step and perspective
+  const [prebuildStep, setPrebuildStep] = useState<'upload' | 'detect' | 'perspective' | 'model'>('upload');
+  const [detectedRoom, setDetectedRoom] = useState<any>(null);
+  const [selectedPerspective, setSelectedPerspective] = useState<string>('inside');
+  const [otherPerspective, setOtherPerspective] = useState<string>('');
+
+  const handleUploadClick = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    console.log("handleFileChange triggered");
+    const file = event.target.files && event.target.files[0];
+    if (file) {
+      // Clean up previous object URL
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+      }
+      const url = URL.createObjectURL(file);
+      setPreviewUrl(url);
+      setSelectedFile(file);
+      setModelResult(null);
+      setModelError(null);
+      console.log("Selected file:", file);
+      // You can add preview or upload logic here
+    }
+  };
+
+  // Clean up object URL on unmount
+  useEffect(() => {
+    return () => {
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+      }
+    };
+  }, [previewUrl]);
+
+  const handleDetectRoom = async () => {
+    console.log("handleDetectRoom triggered");
+    if (!selectedFile) return;
+    setModelLoading(true);
+    setModelError(null);
+    setModelResult(null);
+    try {
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+      const response = await fetch('/api/check-room-and-objects', { // Call the new /api/check-room endpoint
+        method: 'POST',
+        body: formData,
+      });
+      if (!response.ok) {
+        throw new Error('Failed to validate image');
+      }
+      const validationResult = await response.json();
+      if (!validationResult.is_room) {
+        throw new Error(validationResult.message || 'This image does not appear to be a room. Please upload a room photo.');
+      }
+      setDetectedRoom(validationResult);
+      setPrebuildStep('perspective'); // Move to perspective selection step
+    } catch (error: any) {
+      setModelError(error.message || 'Failed to detect room.');
+    } finally {
+      setModelLoading(false);
+    }
+  };
+
+  const handleGenerate3DModel = () => {
+    if (!selectedFile || !detectedRoom) return;
+    // Store file and perspective in localStorage for the loading screen to use
+    localStorage.setItem('pendingModelFile', JSON.stringify({
+      name: selectedFile.name,
+      type: selectedFile.type,
+      lastModified: selectedFile.lastModified,
+    }));
+    // Store the actual file as a blob (since localStorage only stores strings, use FileReader)
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      localStorage.setItem('pendingModelFileData', e.target?.result as string);
+      localStorage.setItem('pendingModelPerspective', selectedPerspective === 'other' ? otherPerspective : selectedPerspective);
+      router.push('/loading');
+    };
+    reader.readAsDataURL(selectedFile);
+  };
+
 
   return (
     <div style={{ 
@@ -637,6 +751,25 @@ export default function LayoutPage() {
               disabled={mode === 'build'}
             >
               Build
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('prebuild')}
+              style={{
+                padding: '9px 25px',
+                borderRadius: 15,
+                border: 'none',
+                fontWeight: 700,
+                fontSize: 15,
+                background: mode === 'prebuild' ? '#facc15' : '#f3f4f6',
+                color: mode === 'prebuild' ? '#222' : '#6b7280',
+                cursor: 'pointer',
+                boxShadow: mode === 'prebuild' ? '0 2px 8px rgba(250,204,21,0.10)' : 'none',
+                transition: 'background 0.15s, color 0.15s',
+              }}
+              disabled={mode === 'prebuild'}
+            >
+              Prebuild
             </button>
           </div>
             {/* Card content: Ask or Build */}
@@ -875,7 +1008,7 @@ export default function LayoutPage() {
                     </form>
                   </div>
                 </div>
-              ) : (
+              ) : mode === 'build' ? (
                 <>
                   {/* Build mode: Modern, effective UI */}
                     <form onSubmit={async (e) => {
@@ -982,7 +1115,186 @@ export default function LayoutPage() {
                       
                     </form>
                 </>
-              )}
+              ) : mode === 'prebuild' ? (
+                <div style={{ width: '100%', textAlign: 'center', padding: '48px 0', color: '#4b5563', fontSize: 20, fontWeight: 600, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                  {prebuildStep === 'upload' && (
+                    <>
+                      <div style={{ marginBottom: 24 }}>
+                        Upload image of your room to create a 3D model of it
+                      </div>
+                      <button
+                        style={{
+                          padding: '12px 32px',
+                          borderRadius: 12,
+                          border: 'none',
+                          background: '#facc15',
+                          color: '#222',
+                          fontWeight: 700,
+                          fontSize: 16,
+                          cursor: 'pointer',
+                          boxShadow: '0 2px 8px rgba(250,204,21,0.10)',
+                          transition: 'background 0.15s, color 0.15s',
+                          marginTop: 8,
+                        }}
+                        onClick={handleUploadClick}
+                        onMouseEnter={e => e.currentTarget.style.background = '#ffe066'}
+                        onMouseLeave={e => e.currentTarget.style.background = '#facc15'}
+                      >
+                        Upload Image
+                      </button>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        ref={fileInputRef}
+                        style={{ display: 'none' }}
+                        onChange={handleFileChange}
+                      />
+                      {previewUrl && (
+                        <>
+                          <img
+                            src={previewUrl}
+                            alt="Room preview"
+                            style={{ marginTop: 24, maxWidth: 400, maxHeight: 300, borderRadius: 12, boxShadow: '0 2px 8px rgba(0,0,0,0.10)' }}
+                          />
+                          <button
+                            style={{
+                              padding: '12px 32px',
+                              borderRadius: 12,
+                              border: 'none',
+                              background: '#18181b',
+                              color: '#fff',
+                              fontWeight: 700,
+                              fontSize: 16,
+                              cursor: selectedFile && !modelLoading ? 'pointer' : 'not-allowed',
+                              boxShadow: '0 2px 8px rgba(24,24,27,0.10)',
+                              transition: 'background 0.15s, color 0.15s',
+                              marginTop: 24,
+                              opacity: selectedFile && !modelLoading ? 1 : 0.6,
+                            }}
+                            onClick={handleDetectRoom}
+                            disabled={!selectedFile || modelLoading}
+                            onMouseEnter={e => e.currentTarget.style.background = '#000'}
+                            onMouseLeave={e => e.currentTarget.style.background = '#18181b'}
+                          >
+                            {modelLoading ? 'Detecting Room...' : 'Detect Room'}
+                          </button>
+                        </>
+                      )}
+                    </>
+                  )}
+                  {prebuildStep === 'perspective' && (
+                    <div style={{
+                      background: '#fff',
+                      borderRadius: 18,
+                      boxShadow: '0 4px 24px rgba(0,0,0,0.07)',
+                      padding: '36px 32px 32px 32px',
+                      maxWidth: 420,
+                      margin: '0 auto',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: 0,
+                    }}>
+                      <div style={{ fontWeight: 800, fontSize: 22, marginBottom: 10, color: '#18181b', letterSpacing: '-0.5px' }}>
+                        What is the perspective of your photo?
+                      </div>
+                      <div style={{ fontSize: 15, color: '#6b7280', marginBottom: 24, fontWeight: 500, textAlign: 'center' }}>
+                        This helps us assign the correct colors to the right walls in your 3D model.
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%' }}>
+                        {[
+                          { value: 'inside', label: 'Inside the room (standing near a wall, facing in)' },
+                          { value: 'topdown', label: 'Top-down (from above)' },
+                          { value: 'front', label: 'Facing the front wall' },
+                          { value: 'left', label: 'Facing the left wall' },
+                          { value: 'right', label: 'Facing the right wall' },
+                          { value: 'back', label: 'Facing the back wall' },
+                          { value: 'other', label: 'Other' },
+                        ].map(opt => (
+                          <div
+                            key={opt.value}
+                            onClick={() => setSelectedPerspective(opt.value)}
+                            style={{
+                              cursor: 'pointer',
+                              background: selectedPerspective === opt.value ? '#facc15' : '#f3f4f6',
+                              color: selectedPerspective === opt.value ? '#18181b' : '#374151',
+                              border: selectedPerspective === opt.value ? '2px solid #facc15' : '2px solid #e5e7eb',
+                              borderRadius: 14,
+                              padding: '12px 18px',
+                              fontWeight: 600,
+                              fontSize: 15,
+                              transition: 'background 0.15s, border 0.15s, color 0.15s',
+                              marginBottom: 0,
+                              outline: selectedPerspective === opt.value ? '2px solid #fde047' : 'none',
+                              boxShadow: selectedPerspective === opt.value ? '0 2px 8px rgba(250,204,21,0.10)' : 'none',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 10,
+                            }}
+                            tabIndex={0}
+                            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') setSelectedPerspective(opt.value); }}
+                          >
+                            <div style={{
+                              width: 18, height: 18, borderRadius: 9, border: '2px solid #d1d5db', background: selectedPerspective === opt.value ? '#fde047' : '#fff', marginRight: 10, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            }}>
+                              {selectedPerspective === opt.value && <div style={{ width: 10, height: 10, borderRadius: 5, background: '#facc15' }} />}
+                            </div>
+                            {opt.label}
+                          </div>
+                        ))}
+                        {selectedPerspective === 'other' && (
+                          <input
+                            type="text"
+                            value={otherPerspective}
+                            onChange={e => setOtherPerspective(e.target.value)}
+                            placeholder="Describe your perspective..."
+                            style={{
+                              marginTop: 10,
+                              padding: '10px 14px',
+                              borderRadius: 10,
+                              border: '1.5px solid #e5e7eb',
+                              fontSize: 15,
+                              width: '100%',
+                              background: '#f9fafb',
+                              color: '#18181b',
+                              fontWeight: 500,
+                              outline: 'none',
+                              boxShadow: '0 1px 4px rgba(0,0,0,0.03)',
+                            }}
+                          />
+                        )}
+                      </div>
+                      <button
+                        style={{
+                          marginTop: 32,
+                          padding: '13px 0',
+                          width: '100%',
+                          borderRadius: 13,
+                          border: 'none',
+                          background: '#18181b',
+                          color: '#fff',
+                          fontWeight: 800,
+                          fontSize: 17,
+                          cursor: !modelLoading ? 'pointer' : 'not-allowed',
+                          boxShadow: '0 2px 8px rgba(24,24,27,0.10)',
+                          transition: 'background 0.15s, color 0.15s',
+                          opacity: !modelLoading ? 1 : 0.6,
+                          letterSpacing: '-0.5px',
+                        }}
+                        onClick={handleGenerate3DModel}
+                        disabled={modelLoading}
+                        onMouseEnter={e => e.currentTarget.style.background = '#000'}
+                        onMouseLeave={e => e.currentTarget.style.background = '#18181b'}
+                      >
+                        {modelLoading ? 'Creating 3D Model...' : 'Continue'}
+                      </button>
+                    </div>
+                  )}
+                  {modelError && (
+                    <div style={{ marginTop: 20, color: '#ef4444', fontWeight: 600, fontSize: 16 }}>{modelError}</div>
+                  )}
+                </div>
+              ) : null}
             </div>
         </div>
       
@@ -1082,6 +1394,7 @@ export default function LayoutPage() {
             overflow: 'hidden',
             cursor: 'pointer',
             transition: 'transform 0.2s, box-shadow 0.2s',
+            position: 'relative',
           }}
            onClick={() => {
             const roomState = {
@@ -1111,6 +1424,32 @@ export default function LayoutPage() {
             e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.05)';
           }}
           >
+            {infoPopup && infoPopup.modelId === model.id && (
+              <div style={{
+                position: 'absolute',
+                top: 16,
+                right: 16,
+                background: 'rgba(0, 0, 0, 0.8)',
+                color: 'white',
+                padding: '12px 16px',
+                borderRadius: 12,
+                zIndex: 10,
+                maxWidth: 280,
+                boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
+                border: '1px solid rgba(255,255,255,0.1)',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                  <Info size={20} style={{ flexShrink: 0, marginTop: 2 }} />
+                  <p style={{ margin: 0, fontSize: 14, lineHeight: 1.5 }}>{infoPopup.message}</p>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setInfoPopup(null); }}
+                    style={{ background: 'transparent', border: 'none', color: 'white', cursor: 'pointer', padding: 4, marginLeft: 8, alignSelf: 'flex-start' }}
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+              </div>
+            )}
             <div style={{ height: 200, background: '#f9fafb' }}>
               <Canvas key={`${model.id}-${sortBy}`} camera={{ position: [0, 2, 5], fov: 50 }}>
                 <ambientLight intensity={0.8} />

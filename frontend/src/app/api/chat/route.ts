@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import admin from '@/lib/firebase/firebase-admin';
 
 // Use environment variable for OpenAI API key
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+// const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const OPENAI_API_KEY='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';
+console.log('OPENAI_API_KEY', OPENAI_API_KEY);
 
 if (!OPENAI_API_KEY) {
   throw new Error('OPENAI_API_KEY is not set in environment variables');
@@ -22,7 +24,7 @@ function createLocalTimeFromISO(dateString: string, offsetMinutes: number): Date
 
 export async function POST(req: NextRequest) {
   try {
-    const { prompt, roomState, messages: _messages, userId, timezoneOffset } = await req.json();
+    const { prompt, roomState, messages: _messages, userId, timezoneOffset, agentSystem } = await req.json();
 
     if (!prompt || !roomState) {
       return NextResponse.json({ message: 'Prompt and roomState are required' }, { status: 400 });
@@ -30,8 +32,34 @@ export async function POST(req: NextRequest) {
 
     const currentDate = new Date().toISOString().split('T')[0];
 
-    const systemPrompt = `
-You are an expert interior design assistant integrated into a 3D house decorator application. You are also a friendly conversationalist.
+    // Enhanced System Prompt with Agent Specialization
+    let systemPrompt = `You are an expert interior design assistant integrated into a 3D house decorator application.`;
+    
+    if (agentSystem) {
+      systemPrompt = `${agentSystem.systemPrompt}
+
+CURRENT SPECIALIZED ROLE: You are ${agentSystem.agentName} ${agentSystem.agentEmoji}, speaking with the expertise of a ${agentSystem.selectedAgent.replace('-', ' ')}.
+
+YOUR SPECIALTIES: ${agentSystem.specialties.join(', ')}
+
+CONFIDENCE LEVELS: ${Object.entries(agentSystem.confidence).map(([skill, conf]) => `${skill}: ${Math.round((conf as number) * 100)}%`).join(', ')}
+
+ACTIVE COLLABORATION: Other active agents in this session: ${agentSystem.activeAgents?.length > 1 ? agentSystem.activeAgents.filter((a: string) => a !== agentSystem.selectedAgent).join(', ') : 'Working independently'}
+
+DESIGN CONTEXT: ${agentSystem.context?.currentFocus ? `Currently focusing on: ${agentSystem.context.currentFocus}` : 'Open consultation'}
+${agentSystem.context?.designStyle ? `Design style preference: ${agentSystem.context.designStyle}` : ''}
+${agentSystem.context?.roomPurpose ? `Room purpose: ${agentSystem.context.roomPurpose}` : ''}
+
+COLLABORATION NOTES: 
+- Acknowledge your specialty while being collaborative
+- When appropriate, suggest consulting other specialists (space planner, design specialist, technical advisor)
+- Be confident in your domain of expertise
+- Show personality as ${agentSystem.agentName}
+
+`;
+    }
+
+    systemPrompt += `
 Users may refer to their saved rooms as "projects" or "designs". Treat these terms as synonyms for rooms.
 
 The current date is ${currentDate}. When a user mentions a date without a year (e.g., "July 6th"), you must resolve it to a full YYYY-MM-DD date. Always assume the year is the current year (${currentDate.substring(0, 4)}).
@@ -220,13 +248,15 @@ Guidelines:
 
 - If the user's request is a simple greeting (e.g., "Hi", "Hello"), respond with a friendly greeting.
 - If the user's request is ambiguous, ask for clarification.
-- If the request is a command to change a color or move an object, ONLY respond with the JSON action object(s). Do not add any extra text.
+- CRITICAL: If the request requires an action (change color, move object, add object, remove object, set dimensions), you MUST respond with ONLY the JSON action object(s). Do not include any extra text, explanations, or formatting. Do not wrap the JSON in code blocks or backticks.
 - If the user asks to change the color or move multiple surfaces or objects (e.g., "all walls", "move both beds"), ALWAYS return an array of action objects, one for each surface or object. For "all walls", return actions for 'wallFrontColor', 'wallBackColor', 'wallLeftColor', and 'wallRightColor'.
 - For objects, match the target to the object's name in the room (case-insensitive). For example, to change the color or move a sofa, use target: 'sofa'.
-- If the user is asking for an opinion or a suggestion, provide a helpful, concise response in plain text.
+- If the user is asking for an opinion or a suggestion without requiring immediate action, provide a helpful, concise response in plain text.
 - Analyze the 'roomState' to give relevant advice. For example, if the room is small, suggest lighter colors. If objects are poorly placed, suggest better arrangements.
 - Keep your text responses friendly and professional.
 - Do not answer questions that are not related to interior design or the current room. Politely decline to answer.
+
+IMPORTANT: When you determine an action is needed, respond with ONLY the raw JSON - no text before or after, no code blocks, no backticks, no explanations. The frontend will handle the user feedback.
 `;
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -243,7 +273,7 @@ Guidelines:
 
 User Request: ${prompt}` },
         ],
-        max_tokens: 200,
+        max_tokens: 800,
         temperature: 0.7,
       }),
     });
