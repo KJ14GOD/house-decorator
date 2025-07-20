@@ -2,9 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import admin from '@/lib/firebase/firebase-admin';
 
 // Use environment variable for OpenAI API key
-// const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const OPENAI_API_KEY='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';
-console.log('OPENAI_API_KEY', OPENAI_API_KEY);
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+console.log('OPENAI_API_KEY from env:', OPENAI_API_KEY);
 
 if (!OPENAI_API_KEY) {
   throw new Error('OPENAI_API_KEY is not set in environment variables');

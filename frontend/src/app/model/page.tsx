@@ -1,9 +1,9 @@
 "use client";
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, Suspense } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Canvas, useThree } from "@react-three/fiber";
-import { OrbitControls, Edges, PointerLockControls, Text } from "@react-three/drei";
+import { OrbitControls, Edges, PointerLockControls, Text, useGLTF } from "@react-three/drei";
 import * as THREE from 'three';
 import { ChevronUp, ChevronDown, Pencil, RotateCcw, RotateCw } from 'lucide-react';
 import { db } from "@/lib/firebase/firebase";
@@ -95,6 +95,25 @@ function RulerRenderer({ rulers, preview, scale }: { rulers: Array<[THREE.Vector
       ))}
       {preview && <RulerDisplay points={preview} scale={scale} isPreview />}
     </group>
+  );
+}
+
+// GLB Model Component
+function GLBModel({ url }: { url: string }) {
+  const { scene } = useGLTF(`/api/model-proxy?url=${encodeURIComponent(url)}`);
+
+  // Calculate the model's bounding box to position it correctly
+  const box = new THREE.Box3().setFromObject(scene);
+  const modelBottom = box.min.y;
+
+  // Position the model so its bottom is slightly above floor level (y=0) to prevent z-fighting
+  const floorOffset = -modelBottom + 0.5;
+
+  return (
+    <primitive
+      object={scene}
+      position={[0, floorOffset, 0]}
+    />
   );
 }
 
@@ -443,6 +462,14 @@ export default function ModelPage() {
   const [roomId, setRoomId] = useState<string | null>(null);
   const [roomName, setRoomName] = useState("Untitled Room");
   const [isEditingName, setIsEditingName] = useState(false);
+
+  // Load meshyModelUrl from localStorage on mount
+  useEffect(() => {
+    const storedModelUrl = localStorage.getItem('meshyModelUrl');
+    if (storedModelUrl) {
+      setMeshyModelUrl(storedModelUrl);
+    }
+  }, []);
 
   // Camera and interaction state
   const [view, setView] = useState<'outside' | 'orbit' | 'inside' | 'topdown' | 'bottomup'>("outside");
@@ -1683,6 +1710,11 @@ Your role is to ground creative ideas in practical reality while supporting the 
                   blocks={blocks}
                   previewBlock={previewMode ? blockConfig : null}
                 />
+                {meshyModelUrl && (
+                  <Suspense fallback={null}>
+                    <GLBModel url={meshyModelUrl} />
+                  </Suspense>
+                )}
                 <RulerRenderer rulers={rulers} preview={rulerPreview} scale={scale} />
                 <PointerLockControls ref={pointerLockRef} />
                 <InsideControls insideActive={insideActive} insidePos={insidePos} setInsidePos={setInsidePos} roomDims={roomDims} insideKeys={insideKeys} />
@@ -1707,6 +1739,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
                   left: 0 
                 }}
                 shadows
+                gl={{ logarithmicDepthBuffer: true }}
               >
                 {/* Enhanced Lighting Setup for Outside View */}
                 <ambientLight intensity={0.4} color="#f5f5f5" />
@@ -1752,6 +1785,11 @@ Your role is to ground creative ideas in practical reality while supporting the 
                   blocks={blocks}
                   previewBlock={previewMode ? blockConfig : null}
                 />
+                {meshyModelUrl && (
+                  <Suspense fallback={null}>
+                    <GLBModel url={meshyModelUrl} />
+                  </Suspense>
+                )}
                 <RulerRenderer rulers={rulers} preview={rulerPreview} scale={scale} />
                 <SceneEvents
                   rulerMode={rulerMode}
@@ -1998,38 +2036,29 @@ Your role is to ground creative ideas in practical reality while supporting the 
                       </div>
                     </button>
 
-                    {/* View 3D Object Button */}
+                    {/* 3D Model Status */}
                     {meshyModelUrl && (
-                      <button
-                        onClick={() => window.open(`/render?model_url=${encodeURIComponent(meshyModelUrl)}`, '_blank')}
+                      <div
                         style={{
                           width: "100%",
                           padding: "12px 16px",
-                          background: "transparent",
-                          border: "none",
+                          background: "#f0f9ff",
+                          border: "1px solid #0ea5e9",
+                          borderRadius: 6,
                           display: "flex",
                           alignItems: "center",
-                          cursor: "pointer",
                           fontSize: 14,
                           fontWeight: 500,
-                          color: "#374151",
-                          borderRadius: 6,
-                          transition: "all 0.2s ease"
-                        }}
-                        onMouseEnter={e => {
-                          e.currentTarget.style.background = "#f9fafb";
-                        }}
-                        onMouseLeave={e => {
-                          e.currentTarget.style.background = "transparent";
+                          color: "#0369a1"
                         }}
                       >
                         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                             <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line>
                           </svg>
-                          <span>View 3D Object</span>
+                          <span>3D Model Loaded</span>
                         </div>
-                      </button>
+                      </div>
                     )}
 
                     {/* Builder Tools */}

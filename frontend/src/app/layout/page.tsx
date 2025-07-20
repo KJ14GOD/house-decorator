@@ -11,7 +11,7 @@ import { db } from "@/lib/firebase/firebase";
 import { collection, addDoc, query, where, getDocs, serverTimestamp, doc, updateDoc, deleteDoc } from "firebase/firestore";
 import { analyzeAndBuildRoomModel, RoomModelResult } from '@/lib/prebuild/imageTo3D';
 
-// This is a simplified version of RoomBox for the preview cards
+// This is a proper room preview for the cards
 function RoomBoxPreview({ width, length, height, floorColor, ceilingColor, wallFrontColor, wallBackColor, wallLeftColor, wallRightColor, blocks }: {
   width: number;
   length: number;
@@ -39,22 +39,55 @@ function RoomBoxPreview({ width, length, height, floorColor, ceilingColor, wallF
   const w = width * scale;
   const l = length * scale;
   const h = height * scale;
+  const wallThickness = 0.1;
 
   return (
     <group>
-      <mesh position={[0, h / 2, 0]}>
-        <boxGeometry args={[w, h, l]} />
-        <meshStandardMaterial color={wallFrontColor} transparent opacity={0.5} />
+      {/* Floor */}
+      <mesh position={[0, 0, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[w, l]} />
+        <meshStandardMaterial key={`floor-material-${floorColor}`} color={new THREE.Color(floorColor || '#e3e3e3')} />
       </mesh>
-       {/* Render all blocks as colored boxes inside the room */}
-       {blocks && blocks.map((block, i) => (
-        <mesh key={`block-${i}`} position={[
+
+      {/* Ceiling */}
+      <mesh position={[0, h, 0]} rotation={[Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[w, l]} />
+        <meshStandardMaterial key={`ceiling-material-${ceilingColor}`} color={new THREE.Color(ceilingColor || '#e3e3e3')} />
+      </mesh>
+
+      {/* Front Wall */}
+      <mesh position={[0, h / 2, l / 2]}>
+        <boxGeometry args={[w, h, wallThickness]} />
+        <meshStandardMaterial key={`wall-front-material-${wallFrontColor}`} color={new THREE.Color(wallFrontColor || '#e3e3e3')} />
+      </mesh>
+
+      {/* Back Wall */}
+      <mesh position={[0, h / 2, -l / 2]}>
+        <boxGeometry args={[w, h, wallThickness]} />
+        <meshStandardMaterial key={`wall-back-material-${wallBackColor}`} color={new THREE.Color(wallBackColor || '#e3e3e3')} />
+      </mesh>
+
+      {/* Left Wall */}
+      <mesh position={[-w / 2, h / 2, 0]}>
+        <boxGeometry args={[wallThickness, h, l]} />
+        <meshStandardMaterial key={`wall-left-material-${wallLeftColor}`} color={new THREE.Color(wallLeftColor || '#e3e3e3')} />
+      </mesh>
+
+      {/* Right Wall */}
+      <mesh position={[w / 2, h / 2, 0]}>
+        <boxGeometry args={[wallThickness, h, l]} />
+        <meshStandardMaterial key={`wall-right-material-${wallRightColor}`} color={new THREE.Color(wallRightColor || '#e3e3e3')} />
+      </mesh>
+
+      {/* Render all blocks as colored boxes inside the room */}
+      {blocks && blocks.map((block, i) => (
+        <mesh key={`block-${block.id || i}`} position={[
           (block.x + block.width/2) * scale - w/2,
           (block.y + block.height/2) * scale,
           (block.z + block.depth/2) * scale - l/2
         ]}>
           <boxGeometry args={[block.width * scale, block.height * scale, block.depth * scale]} />
-          <meshStandardMaterial color={block.color} opacity={0.9} />
+          <meshStandardMaterial key={`block-material-${block.id || i}-${block.color}`} color={new THREE.Color(block.color || '#cccccc')} />
         </mesh>
       ))}
     </group>
@@ -151,6 +184,17 @@ export default function LayoutPage() {
       ...roomState,
       chatMessages: roomState.chatHistory || roomState.chatMessages || [],
       meshy_model_url: roomState.meshy_model_url || (roomState.model_data ? roomState.model_data.meshy_model_url : null),
+      name: roomState.name || 'Untitled Room',
+      width: roomState.width || 12,
+      length: roomState.length || 12,
+      height: roomState.height || 8,
+      floorColor: roomState.floorColor || '#e3e3e3',
+      ceilingColor: roomState.ceilingColor || '#e3e3e3',
+      wallFrontColor: roomState.wallFrontColor || '#e3e3e3',
+      wallBackColor: roomState.wallBackColor || '#e3e3e3',
+      wallLeftColor: roomState.wallLeftColor || '#e3e3e3',
+      wallRightColor: roomState.wallRightColor || '#e3e3e3',
+      blocks: roomState.blocks || [],
     };
     localStorage.setItem('roomState', JSON.stringify(formattedRoomState));
     router.push('/model');
@@ -284,7 +328,7 @@ export default function LayoutPage() {
       setShowAuthModal(true);
       return;
     }
-    if (!message.trim() || isLoading) return;
+    if (!message || !message.trim() || isLoading) return;
 
     const newMessages: ChatMessage[] = [
       ...chatMessages,
@@ -412,7 +456,7 @@ export default function LayoutPage() {
 
   const handleChatSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!chatInput.trim() || isLoading) return;
+    if (!chatInput || !chatInput.trim() || isLoading) return;
     submitMessage(chatInput);
   };
 
@@ -761,15 +805,38 @@ export default function LayoutPage() {
                 border: 'none',
                 fontWeight: 700,
                 fontSize: 15,
-                background: mode === 'prebuild' ? '#facc15' : '#f3f4f6',
-                color: mode === 'prebuild' ? '#222' : '#6b7280',
-                cursor: 'pointer',
-                boxShadow: mode === 'prebuild' ? '0 2px 8px rgba(250,204,21,0.10)' : 'none',
-                transition: 'background 0.15s, color 0.15s',
+                background: '#f3f4f6',
+                color: '#9ca3af',
+                cursor: 'not-allowed',
+                position: 'relative',
+                transition: 'all 0.15s',
+                opacity: 0.7,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px'
               }}
-              disabled={mode === 'prebuild'}
+              disabled={true}
             >
-              Prebuild
+              <span style={{ 
+                textDecoration: 'line-through', 
+                textDecorationColor: '#ef4444', 
+                textDecorationThickness: '2px',
+                textDecorationStyle: 'solid'
+              }}>
+                Prebuild
+              </span>
+              <span style={{ 
+                fontSize: '11px', 
+                color: '#ef4444', 
+                fontWeight: 600,
+                background: '#fef2f2',
+                padding: '2px 6px',
+                borderRadius: '4px',
+                border: '1px solid #fecaca',
+                whiteSpace: 'nowrap'
+              }}>
+                not out
+              </span>
             </button>
           </div>
             {/* Card content: Ask or Build */}
@@ -970,7 +1037,7 @@ export default function LayoutPage() {
                       {/* Send button bottom right inside input bar */}
                       <button
                         type="submit"
-                        disabled={isLoading || !chatInput.trim()}
+                        disabled={isLoading || !(chatInput || '').trim()}
                         style={{
                           position: 'absolute',
                           right: 16,
@@ -991,12 +1058,12 @@ export default function LayoutPage() {
                         }}
                         tabIndex={-1}
                         onMouseEnter={e => {
-                          if (!(isLoading || !chatInput.trim())) {
+                          if (!(isLoading || !(chatInput || '').trim())) {
                             e.currentTarget.style.background = '#fde047';
                           }
                         }}
                         onMouseLeave={e => {
-                          if (!(isLoading || !chatInput.trim())) {
+                          if (!(isLoading || !(chatInput || '').trim())) {
                             e.currentTarget.style.background = '#facc15';
                           }
                         }}
@@ -1455,16 +1522,16 @@ export default function LayoutPage() {
                 <ambientLight intensity={0.8} />
                 <directionalLight position={[5, 10, 7]} intensity={0.8} />
                 <RoomBoxPreview
-                  width={model.width}
-                  length={model.length}
-                  height={model.height}
-                  floorColor={model.floorColor}
-                  ceilingColor={model.ceilingColor}
-                  wallFrontColor={model.wallFrontColor}
-                  wallBackColor={model.wallBackColor}
-                  wallLeftColor={model.wallLeftColor}
-                  wallRightColor={model.wallRightColor}
-                  blocks={model.blocks}
+                  width={model.width || 12}
+                  length={model.length || 12}
+                  height={model.height || 8}
+                  floorColor={model.floorColor || '#e3e3e3'}
+                  ceilingColor={model.ceilingColor || '#e3e3e3'}
+                  wallFrontColor={model.wallFrontColor || '#e3e3e3'}
+                  wallBackColor={model.wallBackColor || '#e3e3e3'}
+                  wallLeftColor={model.wallLeftColor || '#e3e3e3'}
+                  wallRightColor={model.wallRightColor || '#e3e3e3'}
+                  blocks={model.blocks || []}
                 />
                  <OrbitControls enableZoom={false} enablePan={false} autoRotate autoRotateSpeed={0.7} />
               </Canvas>
