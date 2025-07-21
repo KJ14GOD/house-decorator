@@ -1634,200 +1634,363 @@ Your role is to ground creative ideas in practical reality while supporting the 
     }
   };
 
+  // Add state for sidebar tab
+  const [sidebarTab, setSidebarTab] = useState<'menu' | 'ai'>('menu');
+
+  const chatMessagesRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (chatMessagesRef.current) {
+      chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight;
+    }
+  }, [chatMessages]);
+
   if (!isLoaded) {
     return <div>Loading...</div>; // Or a spinner
   }
 
   return (
-    <div style={{ 
-        marginLeft: 0, 
-        transition: "margin-left 0.3s ease",
-        minHeight: "100vh", 
-        background: "#fdfdfb", 
-        color: "#222", 
-        position: "relative", 
-        overflow: "hidden" 
+    <div style={{
+      minHeight: '100vh',
+      background: '#fdfdfb',
+      color: '#222',
+      position: 'relative',
+      overflow: 'hidden',
+    }}>
+      {/* Top left controls: Back, Room Name (editable), Share */}
+      <div style={{
+        position: 'fixed',
+        top: 24,
+        left: 24,
+        zIndex: 10001,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 16,
       }}>
-        <>
-          {/* 3D Canvas (fullscreen in all views) */}
-          {view === 'inside' ? (
-            <div style={{ position: 'fixed', inset: 0, width: '100vw', height: '100vh', zIndex: 1, background: '#fdfdfb' }}>
-              <button onClick={handleExitInside} style={{ position: 'absolute', bottom: 32, right: 32, zIndex: 10001, background: '#222', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 18px', fontWeight: 600, fontSize: 18, cursor: 'pointer' }}>Exit</button>
-              <Canvas
-                camera={{ position: insidePos, fov: 75 }}
-                style={{ 
-                  width: '100vw', 
-                  height: '100vh', 
-                  background: 'linear-gradient(to bottom, #e6f3ff 0%, #f8f9fa 50%, #f1f5f9 100%)', 
-                  position: 'fixed', 
-                  top: 0, 
-                  left: 0 
-                }}
-                onCreated={() => setInsideActive(true)}
-                shadows
-              >
-                {/* Enhanced Lighting Setup for Inside View */}
-                <ambientLight intensity={0.4} color="#f5f5f5" />
-                <directionalLight 
-                  position={[10, 20, 10]} 
-                  intensity={1.2} 
-                  color="#ffffff"
-                  castShadow
-                  shadow-mapSize-width={2048}
-                  shadow-mapSize-height={2048}
-                  shadow-camera-far={50}
-                  shadow-camera-left={-20}
-                  shadow-camera-right={20}
-                  shadow-camera-top={20}
-                  shadow-camera-bottom={-20}
-                />
-                <directionalLight 
-                  position={[-5, 15, -5]} 
-                  intensity={0.5} 
-                  color="#e6f3ff"
-                />
-                <pointLight 
-                  position={[0, height * scale + 2, 0]} 
-                  intensity={0.3} 
-                  color="#fff8e1"
-                  distance={50}
-                  decay={2}
-                />
-                {/* Environmental lighting for depth */}
-                <hemisphereLight
-                  args={["#87CEEB", "#8B7355", 0.2]}
-                />
-                <RoomBox
-                  width={width}
-                  length={length}
-                  height={height}
-                  floorColor={floorColor}
-                  ceilingColor={ceilingColor}
-                  wallFrontColor={wallFrontColor}
-                  wallBackColor={wallBackColor}
-                  wallLeftColor={wallRightColor}
-                  wallRightColor={wallLeftColor}
-                  blocks={blocks}
-                  previewBlock={previewMode ? blockConfig : null}
-                />
-                {meshyModelUrl && (
-                  <Suspense fallback={null}>
-                    <GLBModel url={meshyModelUrl} />
-                  </Suspense>
-                )}
-                <RulerRenderer rulers={rulers} preview={rulerPreview} scale={scale} />
-                <PointerLockControls ref={pointerLockRef} />
-                <InsideControls insideActive={insideActive} insidePos={insidePos} setInsidePos={setInsidePos} roomDims={roomDims} insideKeys={insideKeys} />
-                {/* Move camera in render loop */}
-                <CameraUpdater position={insidePos} />
-              </Canvas>
-            </div>
-          ) : (
-            <div style={{ position: 'fixed', inset: 0, width: '100vw', height: '100vh', background: 'transparent', zIndex: 1 }}>
-              <Canvas
-                camera={{
-                  position: cameraPositions[view as 'outside' | 'orbit' | 'topdown' | 'bottomup'],
-                  fov: 50,
-                  up: view === 'bottomup' ? [0, -1, 0] : [0, 1, 0],
-                }}
-                style={{ 
-                  width: '100vw', 
-                  height: '100vh', 
-                  background: 'linear-gradient(to bottom, #e6f3ff 0%, #f8f9fa 50%, #f1f5f9 100%)', 
-                  position: 'fixed', 
-                  top: 0, 
-                  left: 0 
-                }}
-                shadows
-                gl={{ logarithmicDepthBuffer: true }}
-              >
-                {/* Enhanced Lighting Setup for Outside View */}
-                <ambientLight intensity={0.4} color="#f5f5f5" />
-                <directionalLight 
-                  position={[10, 20, 10]} 
-                  intensity={1.2} 
-                  color="#ffffff"
-                  castShadow
-                  shadow-mapSize-width={2048}
-                  shadow-mapSize-height={2048}
-                  shadow-camera-far={50}
-                  shadow-camera-left={-20}
-                  shadow-camera-right={20}
-                  shadow-camera-top={20}
-                  shadow-camera-bottom={-20}
-                />
-                <directionalLight 
-                  position={[-5, 15, -5]} 
-                  intensity={0.5} 
-                  color="#e6f3ff"
-                />
-                <pointLight 
-                  position={[0, height * scale + 2, 0]} 
-                  intensity={0.3} 
-                  color="#fff8e1"
-                  distance={50}
-                  decay={2}
-                />
-                {/* Environmental lighting for depth */}
-                <hemisphereLight
-                  args={["#87CEEB", "#8B7355", 0.2]}
-                />
-                <RoomBox
-                  width={width}
-                  length={length}
-                  height={height}
-                  floorColor={floorColor}
-                  ceilingColor={ceilingColor}
-                  wallFrontColor={wallFrontColor}
-                  wallBackColor={wallBackColor}
-                  wallLeftColor={wallRightColor}
-                  wallRightColor={wallLeftColor}
-                  blocks={blocks}
-                  previewBlock={previewMode ? blockConfig : null}
-                />
-                {meshyModelUrl && (
-                  <Suspense fallback={null}>
-                    <GLBModel url={meshyModelUrl} />
-                  </Suspense>
-                )}
-                <RulerRenderer rulers={rulers} preview={rulerPreview} scale={scale} />
-                <SceneEvents
-                  rulerMode={rulerMode}
-                  rulerStartPoint={rulerStartPoint}
-                  setRulerStartPoint={setRulerStartPoint}
-                  setRulers={setRulers}
-                  setRulerPreview={setRulerPreview}
-                />
-                <OrbitControls
-                  enablePan={false}
-                  target={
-                    view === 'bottomup'
-                      ? [0, height * scale, 0] // center of ceiling
-                      : [0, height * scale / 2, 0] // center of room
-                  }
-                  maxPolarAngle={view === 'topdown' ? 0 : view === 'bottomup' ? Math.PI : Math.PI}
-                  minPolarAngle={view === 'topdown' ? 0 : view === 'bottomup' ? Math.PI : 0}
-                />
-              </Canvas>
-            </div>
-          )}
-          {/* Left Sidebar */}
-          <div
+        {/* Back Button */}
+        <button
+          onClick={handleSaveAndExit}
+          style={{
+            background: '#fff',
+            border: '1px solid #e5e7eb',
+            borderRadius: '50%',
+            width: 44,
+            height: 44,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+            cursor: 'pointer',
+            transition: 'background 0.2s',
+          }}
+          onMouseEnter={e => (e.currentTarget.style.background = '#f3f4f6')}
+          onMouseLeave={e => (e.currentTarget.style.background = '#fff')}
+          title="Back to Layout"
+        >
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#222" strokeWidth="2"><path d="M15 18l-6-6 6-6"/></svg>
+        </button>
+        {/* Room Name (editable) */}
+        {isEditingName ? (
+          <form onSubmit={async e => {
+            e.preventDefault();
+            if (!roomId) return setIsEditingName(false);
+            try {
+              const roomRef = doc(db, 'rooms', roomId);
+              await updateDoc(roomRef, { name: roomName });
+            } catch (err) { console.error(err); }
+            setIsEditingName(false);
+          }} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input
+              value={roomName}
+              onChange={e => setRoomName(e.target.value)}
+              autoFocus
+              style={{
+                fontSize: 18,
+                fontWeight: 600,
+                border: '1px solid #e5e7eb',
+                borderRadius: 8,
+                padding: '6px 12px',
+                outline: 'none',
+                minWidth: 120,
+                background: '#fff',
+                color: '#222',
+              }}
+              onBlur={e => setIsEditingName(false)}
+            />
+            <button type="submit" style={{ background: '#222', color: '#fff', border: 'none', borderRadius: 8, padding: '6px 12px', fontWeight: 600, cursor: 'pointer' }}>Save</button>
+          </form>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 18, fontWeight: 600, color: '#222', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{roomName}</span>
+            <button onClick={() => setIsEditingName(true)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', padding: 4, borderRadius: 6 }} title="Edit Room Name">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+            </button>
+          </div>
+        )}
+        {/* Share Button */}
+        <button
+          onClick={() => {
+            if (navigator.share) {
+              navigator.share({ title: roomName, url: window.location.href });
+            } else {
+              navigator.clipboard.writeText(window.location.href);
+              alert('Room link copied to clipboard!');
+            }
+          }}
+          style={{
+            background: '#fff',
+            border: '1px solid #e5e7eb',
+            borderRadius: '50%',
+            width: 40,
+            height: 40,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.04)',
+            cursor: 'pointer',
+            marginLeft: 4,
+            transition: 'background 0.2s',
+          }}
+          title="Share Room"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#222" strokeWidth="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.59 13.51l6.83 3.98"/><path d="M15.41 6.51l-6.82 3.98"/></svg>
+        </button>
+      </div>
+
+      {/* 3D Canvas (centered in area left of sidebar) */}
+      <div style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        width: 'calc(100vw - 380px)', // leave space for sidebar
+        height: '100vh',
+        zIndex: 1,
+        background: '#fff',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}>
+        {view === 'inside' ? (
+          <div style={{ width: '100%', height: '100%' }}>
+            <button onClick={handleExitInside} style={{ position: 'absolute', bottom: 32, right: 32, zIndex: 10001, background: '#222', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 18px', fontWeight: 600, fontSize: 18, cursor: 'pointer' }}>Exit</button>
+            <Canvas
+              camera={{ position: insidePos, fov: 75 }}
+              style={{
+                width: '100%',
+                height: '100vh',
+                background: '#fff',
+              }}
+              onCreated={() => setInsideActive(true)}
+              shadows
+            >
+              {/* Enhanced Lighting Setup for Inside View */}
+              <ambientLight intensity={0.4} color="#f5f5f5" />
+              <directionalLight 
+                position={[10, 20, 10]} 
+                intensity={1.2} 
+                color="#ffffff"
+                castShadow
+                shadow-mapSize-width={2048}
+                shadow-mapSize-height={2048}
+                shadow-camera-far={50}
+                shadow-camera-left={-20}
+                shadow-camera-right={20}
+                shadow-camera-top={20}
+                shadow-camera-bottom={-20}
+              />
+              <directionalLight 
+                position={[-5, 15, -5]} 
+                intensity={0.5} 
+                color="#e6f3ff"
+              />
+              <pointLight 
+                position={[0, height * scale + 2, 0]} 
+                intensity={0.3} 
+                color="#fff8e1"
+                distance={50}
+                decay={2}
+              />
+              {/* Environmental lighting for depth */}
+              <hemisphereLight
+                args={["#87CEEB", "#8B7355", 0.2]}
+              />
+              <RoomBox
+                width={width}
+                length={length}
+                height={height}
+                floorColor={floorColor}
+                ceilingColor={ceilingColor}
+                wallFrontColor={wallFrontColor}
+                wallBackColor={wallBackColor}
+                wallLeftColor={wallRightColor}
+                wallRightColor={wallLeftColor}
+                blocks={blocks}
+                previewBlock={previewMode ? blockConfig : null}
+              />
+              {meshyModelUrl && (
+                <Suspense fallback={null}>
+                  <GLBModel url={meshyModelUrl} />
+                </Suspense>
+              )}
+              <RulerRenderer rulers={rulers} preview={rulerPreview} scale={scale} />
+              <PointerLockControls ref={pointerLockRef} />
+              <InsideControls insideActive={insideActive} insidePos={insidePos} setInsidePos={setInsidePos} roomDims={roomDims} insideKeys={insideKeys} />
+              {/* Move camera in render loop */}
+              <CameraUpdater position={insidePos} />
+            </Canvas>
+          </div>
+        ) : (
+          <div style={{ width: '100%', height: '100%' }}>
+            <Canvas
+              camera={{
+                position: cameraPositions[view as 'outside' | 'orbit' | 'topdown' | 'bottomup'],
+                fov: 50,
+                up: view === 'bottomup' ? [0, -1, 0] : [0, 1, 0],
+              }}
+              style={{
+                width: '100%',
+                height: '100vh',
+                background: '#fff',
+              }}
+              shadows
+              gl={{ logarithmicDepthBuffer: true }}
+            >
+              {/* Enhanced Lighting Setup for Outside View */}
+              <ambientLight intensity={0.4} color="#f5f5f5" />
+              <directionalLight 
+                position={[10, 20, 10]} 
+                intensity={1.2} 
+                color="#ffffff"
+                castShadow
+                shadow-mapSize-width={2048}
+                shadow-mapSize-height={2048}
+                shadow-camera-far={50}
+                shadow-camera-left={-20}
+                shadow-camera-right={20}
+                shadow-camera-top={20}
+                shadow-camera-bottom={-20}
+              />
+              <directionalLight 
+                position={[-5, 15, -5]} 
+                intensity={0.5} 
+                color="#e6f3ff"
+              />
+              <pointLight 
+                position={[0, height * scale + 2, 0]} 
+                intensity={0.3} 
+                color="#fff8e1"
+                distance={50}
+                decay={2}
+              />
+              {/* Environmental lighting for depth */}
+              <hemisphereLight
+                args={["#87CEEB", "#8B7355", 0.2]}
+              />
+              <RoomBox
+                width={width}
+                length={length}
+                height={height}
+                floorColor={floorColor}
+                ceilingColor={ceilingColor}
+                wallFrontColor={wallFrontColor}
+                wallBackColor={wallBackColor}
+                wallLeftColor={wallRightColor}
+                wallRightColor={wallLeftColor}
+                blocks={blocks}
+                previewBlock={previewMode ? blockConfig : null}
+              />
+              {meshyModelUrl && (
+                <Suspense fallback={null}>
+                  <GLBModel url={meshyModelUrl} />
+                </Suspense>
+              )}
+              <RulerRenderer rulers={rulers} preview={rulerPreview} scale={scale} />
+              <SceneEvents
+                rulerMode={rulerMode}
+                rulerStartPoint={rulerStartPoint}
+                setRulerStartPoint={setRulerStartPoint}
+                setRulers={setRulers}
+                setRulerPreview={setRulerPreview}
+              />
+              <OrbitControls
+                enablePan={false}
+                target={
+                  view === 'bottomup'
+                    ? [0, height * scale, 0] // center of ceiling
+                    : [0, height * scale / 2, 0] // center of room
+                }
+                maxPolarAngle={view === 'topdown' ? 0 : view === 'bottomup' ? Math.PI : Math.PI}
+                minPolarAngle={view === 'topdown' ? 0 : view === 'bottomup' ? Math.PI : 0}
+              />
+            </Canvas>
+          </div>
+        )}
+      </div>
+
+      {/* Right Sidebar with Tabs */}
+      <div
+        style={{
+          position: 'fixed',
+          top: 0,
+          right: 0,
+          width: 380,
+          height: '100vh',
+          background: '#fff',
+          borderLeft: '1px solid #e5e7eb',
+          boxShadow: '-2px 0 12px rgba(0,0,0,0.04)',
+          zIndex: 9999,
+          display: 'flex',
+          flexDirection: 'column',
+          fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+        }}
+      >
+        {/* Tab Switcher */}
+        <div style={{
+          display: 'flex',
+          borderBottom: '1px solid #e5e7eb',
+          background: '#fafafa',
+        }}>
+          <button
+            onClick={() => setSidebarTab('menu')}
             style={{
-              position: "fixed",
-              top: 0,
-              left: 0,
-              width: sidebarCollapsed ? 60 : 280,
-              height: "100vh",
-              background: "#ffffff",
-              borderRight: "1px solid #e5e7eb",
-              transition: "width 0.3s ease",
-              zIndex: 9999,
-              display: "flex",
-              flexDirection: "column",
-              fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+              flex: 1,
+              padding: '16px 0',
+              fontWeight: 600,
+              fontSize: 16,
+              background: sidebarTab === 'menu' ? '#fff' : 'transparent',
+              border: 'none',
+              borderBottom: sidebarTab === 'menu' ? '2px solid #facc15' : '2px solid transparent',
+              color: sidebarTab === 'menu' ? '#222' : '#9ca3af',
+              cursor: 'pointer',
+              transition: 'background 0.2s',
             }}
           >
+            Menu
+          </button>
+          <button
+            onClick={() => setSidebarTab('ai')}
+            style={{
+              flex: 1,
+              padding: '16px 0',
+              fontWeight: 600,
+              fontSize: 16,
+              background: sidebarTab === 'ai' ? '#fff' : 'transparent',
+              border: 'none',
+              borderBottom: sidebarTab === 'ai' ? '2px solid #facc15' : '2px solid transparent',
+              color: sidebarTab === 'ai' ? '#222' : '#9ca3af',
+              cursor: 'pointer',
+              transition: 'background 0.2s',
+            }}
+          >
+            AI
+          </button>
+        </div>
+        {/* Tab Content */}
+        <div style={{ flex: 1, overflow: 'auto', position: 'relative' }}>
+          {sidebarTab === 'menu' ? (
+            // Main menu content (camera views, builder tools, color palette, library, dimensions, etc)
+            <>
+                
                           {/* Header */}
               <div style={{
                 padding: sidebarCollapsed ? "8px" : "12px 16px",
@@ -1836,45 +1999,6 @@ Your role is to ground creative ideas in practical reality while supporting the 
                 alignItems: "center",
                 justifyContent: sidebarCollapsed ? "center" : "space-between"
               }}>
-              {!sidebarCollapsed && (
-                <div>
-                  <button onClick={handleSaveAndExit} style={{
-                      margin: 0,
-                      fontSize: 18,
-                      fontWeight: 600,
-                      color: "#111827",
-                      letterSpacing: "-0.025em",
-                      background: 'none',
-                      border: 'none',
-                      cursor: 'pointer'
-                    }}>
-                    &larr; Back to Layout
-                  </button>
-                </div>
-              )}
-              <button
-                onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  padding: "8px",
-                  cursor: "pointer",
-                  color: "#6b7280",
-                  fontSize: 16
-                }}
-              >
-                {sidebarCollapsed ? (
-                  <>
-                    {/* Placeholder for collapsed icon */}
-                    <span>☰</span>
-                  </>
-                ) : (
-                  <>
-                    {/* Placeholder for expanded icon */}
-                    <span>✕</span>
-                  </>
-                )}
-              </button>
             </div>
 
                           {/* Navigation Content */}
@@ -2053,8 +2177,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
                         }}
                       >
                         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line>
+                           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line>
                           </svg>
                           <span>3D Model Loaded</span>
                         </div>
@@ -3108,423 +3231,300 @@ Your role is to ground creative ideas in practical reality while supporting the 
                   </>
                 )}
               </div>
-          </div>
-
-          {/* Notion-style AI Assistant */}
-          <div
-            style={{
+            </>
+          ) : (
+            // AI Chatbot content
+            <div style={{
+              display: 'flex',
+              flexDirection: 'column',
+              height: '100%',
+              background: '#fff',
               fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
-              position: "fixed",
-              bottom: "24px",
-              right: "24px",
-              zIndex: 99999,
-            }}
-          >
-            {chatbotOpen && (
+              borderLeft: 'none',
+              borderRadius: 0,
+              boxShadow: 'none',
+            }}>
+              {/* Header */}
               <div
-                ref={chatbotRef}
+                onClick={() => router.push('/chat')}
                 style={{
-                  width: chatbotWidth,
-                  height: chatbotHeight,
-                  minWidth: "300px",
-                  minHeight: "300px",
-                  background: "#ffffff",
-                  borderRadius: "12px",
-                  boxShadow: "0 4px 20px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.04)",
-                  border: "1px solid #e5e7eb",
-                  display: "flex",
-                  flexDirection: "column",
-                  marginBottom: "12px",
-                  overflow: "hidden",
-                  position: "fixed",
-                  right: "24px",
-                  bottom: "24px",
-                  top: "unset",
-                  left: "unset",
-                  zIndex: 99999,
+                  padding: '14px 20px 10px 20px',
+                  borderBottom: '1px solid #e5e7eb',
+                  background: '#fafafa',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  cursor: 'pointer',
+                  borderRadius: 0,
+                  userSelect: 'none',
+                  transition: 'background 0.2s, color 0.2s',
+                }}
+                title="Open full chat interface"
+                onMouseEnter={e => {
+                  e.currentTarget.style.background = '#f3f4f6';
+                  const title = e.currentTarget.querySelector('.chat-header-title');
+                  if (title && title instanceof HTMLElement) title.style.color = '#111';
+                }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.background = '#fafafa';
+                  const title = e.currentTarget.querySelector('.chat-header-title');
+                  if (title && title instanceof HTMLElement) title.style.color = '#222';
                 }}
               >
-                {/* Resize Handle */}
-                <div
-                  style={{
-                    position: "absolute",
-                    top: 0,
-                    left: 0,
-                    width: "16px",
-                    height: "16px",
-                    cursor: "nwse-resize",
-                    zIndex: 10,
-                    background: "transparent",
-                  }}
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const startWidth = chatbotWidth;
-                    const startHeight = chatbotHeight;
-                    const startX = e.clientX;
-                    const startY = e.clientY;
-
-                    const handleMouseMove = (e: MouseEvent) => {
-                      e.preventDefault();
-                      const deltaX = startX - e.clientX;
-                      const deltaY = startY - e.clientY;
-                      const newWidth = Math.max(300, Math.min(600, startWidth + deltaX));
-                      const newHeight = Math.max(300, Math.min(600, startHeight + deltaY));
-                      setChatbotWidth(newWidth);
-                      setChatbotHeight(newHeight);
-                    };
-
-                    const handleMouseUp = () => {
-                      document.removeEventListener("mousemove", handleMouseMove);
-                      document.removeEventListener("mouseup", handleMouseUp);
-                    };
-
-                    document.addEventListener("mousemove", handleMouseMove);
-                    document.addEventListener("mouseup", handleMouseUp);
-                  }}
-                />
-                {/* Header */}
-                <div
-                  style={{
-                    padding: "14px 20px 10px 20px",
-                    borderBottom: "1px solid #e5e7eb",
-                    background: "#fafafa",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "10px",
-                  }}
-                >
-                  <div
-                    onClick={() => router.push('/chat')}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "10px",
-                      cursor: "pointer",
-                      flex: 1,
-                      padding: "4px 0",
-                      borderRadius: "6px",
-                      transition: "background 0.2s ease"
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.backgroundColor = '#f0f0f0';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor = 'transparent';
-                    }}
-                    title="Open full chat interface"
-                  >
-                    <span style={{ fontSize: 20, marginRight: 6 }}>✨</span>
-                    <span style={{ fontWeight: 600, fontSize: 15, color: "#222" }}>Decorator AI</span>
-                    <span style={{ fontSize: 12, color: "#9ca3af", marginLeft: "auto" }}>
-                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M7 17L17 7M17 7H7M17 7V17"/>
-                      </svg>
-                    </span>
+                <span style={{ fontSize: 20, marginRight: 6 }}>✨</span>
+                <span className="chat-header-title" style={{ fontWeight: 600, fontSize: 15, color: '#222', transition: 'color 0.2s' }}>Decorator AI</span>
+                <span style={{ flex: 1 }} />
+                <span style={{ fontSize: 16, color: '#bdbdbd', marginLeft: 8, display: 'flex', alignItems: 'center', transition: 'color 0.2s' }}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 6l6 6-6 6"/></svg>
+                </span>
+              </div>
+              {/* Chat Messages */}
+              <div style={{
+                flex: 1,
+                overflowY: 'auto',
+                padding: '16px 20px',
+                background: '#fafafa',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '12px',
+              }}
+              ref={chatMessagesRef}
+              >
+                {/* Active Agents Indicator */}
+                {activeAgents.length > 0 && (
+                  <div style={{
+                    background: '#f8fafc',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '8px',
+                    padding: '8px 12px',
+                    marginBottom: '12px',
+                  }}>
+                    <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '4px' }}>
+                      🤖 Active Specialists
+                    </div>
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                      {activeAgents.map(agent => {
+                        const agentInfo = agentSystem[agent as keyof typeof agentSystem];
+                        return (
+                          <span
+                            key={agent}
+                            style={{
+                              fontSize: '10px',
+                              padding: '2px 6px',
+                              borderRadius: '12px',
+                              background: '#e0f2fe',
+                              color: '#0369a1',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '2px',
+                            }}
+                          >
+                            {agentInfo?.emoji} {agentInfo?.name}
+                          </span>
+                        );
+                      })}
+                    </div>
                   </div>
-                  <button
-                    onClick={() => setChatbotOpen(false)}
+                )}
+                {/* Contextual Suggestions */}
+                {getContextualSuggestions().length > 0 && (
+                  <div style={{
+                    background: 'linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%)',
+                    border: '1px solid #0ea5e9',
+                    borderRadius: '8px',
+                    padding: '10px 12px',
+                    marginBottom: '12px',
+                  }}>
+                    <div style={{ fontSize: '11px', color: '#0369a1', fontWeight: 600, marginBottom: '6px' }}>
+                      🧠 Smart Context
+                    </div>
+                    {getContextualSuggestions().map((suggestion, i) => (
+                      <div key={i} style={{
+                        fontSize: '11px',
+                        color: '#0f172a',
+                        marginBottom: '2px',
+                        lineHeight: '1.3',
+                      }}>{suggestion}</div>
+                    ))}
+                  </div>
+                )}
+                {/* Empty state */}
+                {chatMessages.length === 0 && (
+                  <div style={{ color: '#9ca3af', fontSize: 14, textAlign: 'center', marginTop: 40 }}>
+                    🎨 Ask me anything about your room design!<br />
+                    <span style={{ fontSize: 12 }}>I'll connect you with the right specialist</span>
+                  </div>
+                )}
+                {/* Chat messages */}
+                {chatMessages.map((msg, i) => (
+                  <div
+                    key={i}
                     style={{
-                      marginLeft: 10,
-                      background: "none",
-                      border: "none",
-                      color: "#9ca3af",
-                      fontSize: 18,
-                      cursor: "pointer",
-                      borderRadius: 6,
-                      padding: 4,
-                      transition: "background 0.15s"
+                      alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                      background: msg.role === 'user' ? '#e0e7ef' : '#fff',
+                      color: '#222',
+                      borderRadius: 8,
+                      padding: '10px 14px',
+                      maxWidth: '80%',
+                      fontSize: 14,
+                      boxShadow: msg.role === 'assistant' ? '0 1px 4px rgba(0,0,0,0.04)' : 'none',
+                      border: msg.role === 'assistant' ? '1px solid #e5e7eb' : 'none',
+                      marginBottom: 2,
                     }}
-                    title="Close"
                   >
-                    ×
-                  </button>
-                </div>
-                {/* Chat Messages */}
-                <div
-                  style={{
-                    flex: 1,
-                    overflowY: "auto",
-                    padding: "16px 20px",
-                    background: "#fafafa",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "12px"
-                  }}
-                >
-                  {/* Active Agents Indicator */}
-                  {activeAgents.length > 0 && (
-                    <div style={{
-                      background: '#f8fafc',
-                      border: '1px solid #e2e8f0',
-                      borderRadius: '8px',
-                      padding: '8px 12px',
-                      marginBottom: '12px'
-                    }}>
-                      <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '4px' }}>
-                        🤖 Active Specialists
-                      </div>
-                      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                        {activeAgents.map(agent => {
-                          const agentInfo = agentSystem[agent as keyof typeof agentSystem];
-                          return (
-                            <span
-                              key={agent}
-                              style={{
-                                fontSize: '10px',
-                                padding: '2px 6px',
-                                borderRadius: '12px',
-                                background: '#e0f2fe',
-                                color: '#0369a1',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '2px'
-                              }}
-                            >
-                              {agentInfo?.emoji} {agentInfo?.name}
-                            </span>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                  
-                  {/* Contextual Suggestions */}
-                  {getContextualSuggestions().length > 0 && (
-                    <div style={{
-                      background: 'linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%)',
-                      border: '1px solid #0ea5e9',
-                      borderRadius: '8px',
-                      padding: '10px 12px',
-                      marginBottom: '12px'
-                    }}>
-                      <div style={{ fontSize: '11px', color: '#0369a1', fontWeight: 600, marginBottom: '6px' }}>
-                        🧠 Smart Context
-                      </div>
-                      {getContextualSuggestions().map((suggestion, i) => (
-                        <div key={i} style={{
-                          fontSize: '11px',
-                          color: '#0f172a',
-                          marginBottom: '2px',
-                          lineHeight: '1.3'
-                        }}>
-                          {suggestion}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {chatMessages.length === 0 && (
-                    <div style={{ color: "#9ca3af", fontSize: 14, textAlign: "center", marginTop: 40 }}>
-                      🎨 Ask me anything about your room design!<br/>
-                      <span style={{ fontSize: 12 }}>I'll connect you with the right specialist</span>
-                    </div>
-                  )}
-                  {chatMessages.map((msg, i) => (
-                    <div
-                      key={i}
-                      style={{
-                        alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                        background: msg.role === 'user' ? '#e0e7ef' : '#fff',
-                        color: '#222',
-                        borderRadius: 8,
-                        padding: '10px 14px',
-                        maxWidth: '80%',
-                        fontSize: 14,
-                        boxShadow: msg.role === 'assistant' ? '0 1px 4px rgba(0,0,0,0.04)' : 'none',
-                        border: msg.role === 'assistant' ? '1px solid #e5e7eb' : 'none',
-                        marginBottom: 2
-                      }}
-                    >
-                      {/* Agent header for assistant messages */}
-                      {msg.role === 'assistant' && msg.agent && (
-                        <div style={{
+                    {/* Agent header for assistant messages */}
+                    {msg.role === 'assistant' && msg.agent && (
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        marginBottom: '6px',
+                        paddingBottom: '4px',
+                        borderBottom: '1px solid #f3f4f6',
+                      }}>
+                        <span style={{
+                          fontSize: '12px',
+                          fontWeight: 600,
+                          color: '#4f46e5',
                           display: 'flex',
                           alignItems: 'center',
-                          justifyContent: 'space-between',
-                          marginBottom: '6px',
-                          paddingBottom: '4px',
-                          borderBottom: '1px solid #f3f4f6'
+                          gap: '4px',
                         }}>
+                          {agentSystem[msg.agent as keyof typeof agentSystem]?.emoji || '🤖'} {agentSystem[msg.agent as keyof typeof agentSystem]?.name || 'Assistant'}
+                        </span>
+                        {msg.confidence && (
                           <span style={{
-                            fontSize: '12px',
-                            fontWeight: 600,
-                            color: '#4f46e5',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '4px'
+                            fontSize: '10px',
+                            padding: '1px 6px',
+                            borderRadius: '8px',
+                            backgroundColor: msg.confidence > 0.8 ? '#dcfce7' : msg.confidence > 0.6 ? '#fef3c7' : '#fecaca',
+                            color: msg.confidence > 0.8 ? '#166534' : msg.confidence > 0.6 ? '#92400e' : '#991b1b',
                           }}>
-                            {agentSystem[msg.agent as keyof typeof agentSystem]?.emoji || '🤖'} {agentSystem[msg.agent as keyof typeof agentSystem]?.name || 'Assistant'}
+                            {Math.round(msg.confidence * 100)}%
                           </span>
-                          {msg.confidence && (
-                            <span style={{
-                              fontSize: '10px',
-                              padding: '1px 6px',
-                              borderRadius: '8px',
-                              backgroundColor: msg.confidence > 0.8 ? '#dcfce7' : msg.confidence > 0.6 ? '#fef3c7' : '#fecaca',
-                              color: msg.confidence > 0.8 ? '#166534' : msg.confidence > 0.6 ? '#92400e' : '#991b1b'
-                            }}>
-                              {Math.round(msg.confidence * 100)}%
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      
-                      {/* Message content */}
-                      <div>{msg.content}</div>
-                      
-                      {/* Reasoning footer for assistant messages */}
-                      {msg.role === 'assistant' && msg.reasoning && (
-                        <div style={{
-                          marginTop: '6px',
-                          paddingTop: '4px',
-                          borderTop: '1px solid #f3f4f6',
-                          fontSize: '11px',
-                          color: '#6b7280',
-                          fontStyle: 'italic'
-                        }}>
-                          💭 {msg.reasoning}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                  {isLoading && (
-                    <div style={{
-                      borderRadius: "8px",
-                      background: "#f9fafb",
-                      color: "#6b7280",
-                      fontSize: "13px",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "8px",
-                      padding: "10px 14px",
-                      marginTop: 4,
-                      maxWidth: '60%',
-                    }}>
-                      <div style={{ fontSize: "12px" }}>⋯</div>
-                      <div>Thinking</div>
-                    </div>
-                  )}
-                </div>
-                {/* Input */}
-                <form
-                  onSubmit={handleChatSubmit}
-                  style={{
-                    padding: "16px 20px",
-                    background: "#ffffff",
-                    borderTop: "1px solid #e5e7eb",
-                  }}
-                >
-                  <div style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 0,
-                    position: "relative",
-                  }}>
-                    <input
-                      type="text"
-                      value={chatInput}
-                      onChange={(e) => setChatInput(e.target.value)}
-                      placeholder="Ask about your room design..."
-                      style={{
-                        flex: 1,
-                        padding: "14px 20px",
-                        borderRadius: "999px",
-                        border: "1.5px solid #e5e7eb",
-                        fontSize: "15px",
-                        outline: "none",
-                        background: "#f9fafb",
-                        color: "#222",
-                        boxShadow: "none",
-                        transition: "border-color 0.15s, box-shadow 0.15s",
-                        marginRight: "-44px", // overlap the button
-                        zIndex: 1,
-                      }}
-                      onFocus={(e) => {
-                        e.target.style.borderColor = "#facc15";
-                        e.target.style.boxShadow = "0 0 0 2px rgba(250,204,21,0.15)";
-                      }}
-                      onBlur={(e) => {
-                        e.target.style.borderColor = "#e5e7eb";
-                        e.target.style.boxShadow = "none";
-                      }}
-                      disabled={isLoading}
-                    />
-                    <button
-                      type="submit"
-                      disabled={isLoading || !chatInput.trim()}
-                      style={{
-                        width: "40px",
-                        height: "40px",
-                        borderRadius: "50%",
-                        background: isLoading || !chatInput.trim() ? "#fef08a" : "#facc15",
-                        border: "none",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        position: "relative",
-                        right: "8px",
-                        boxShadow: isLoading || !chatInput.trim() ? "none" : "0 2px 8px rgba(250,204,21,0.10)",
-                        cursor: isLoading || !chatInput.trim() ? "not-allowed" : "pointer",
-                        transition: "background 0.15s, box-shadow 0.15s",
-                        zIndex: 2,
-                      }}
-                      tabIndex={-1}
-                      onMouseEnter={e => {
-                        if (!(isLoading || !chatInput.trim())) {
-                          e.currentTarget.style.background = "#fde047";
-                        }
-                      }}
-                      onMouseLeave={e => {
-                        if (!(isLoading || !chatInput.trim())) {
-                          e.currentTarget.style.background = "#facc15";
-                        }
-                      }}
-                    >
-                      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M4 10H16M16 10L11 5M16 10L11 15" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                    </button>
+                        )}
+                      </div>
+                    )}
+                    {/* Message content */}
+                    <div>{msg.content}</div>
+                    {/* Reasoning footer for assistant messages */}
+                    {msg.role === 'assistant' && msg.reasoning && (
+                      <div style={{
+                        marginTop: '6px',
+                        paddingTop: '4px',
+                        borderTop: '1px solid #f3f4f6',
+                        fontSize: '11px',
+                        color: '#6b7280',
+                        fontStyle: 'italic',
+                      }}>
+                        💭 {msg.reasoning}
+                      </div>
+                    )}
                   </div>
-                </form>
+                ))}
+                {/* Loading indicator */}
+                {isLoading && (
+                  <div style={{
+                    borderRadius: '8px',
+                    background: '#f9fafb',
+                    color: '#6b7280',
+                    fontSize: '13px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '10px 14px',
+                    marginTop: 4,
+                    maxWidth: '60%',
+                  }}>
+                    <div style={{ fontSize: '12px' }}>⋯</div>
+                    <div>Thinking</div>
+                  </div>
+                )}
               </div>
-            )}
-
-            {/* Chat Button */}
-            {!chatbotOpen && (
-              <button
-                onClick={() => setChatbotOpen(true)}
+              {/* Input */}
+              <form
+                onSubmit={handleChatSubmit}
                 style={{
-                  width: "48px",
-                  height: "48px",
-                  borderRadius: "12px",
-                  background: "#ffffff",
-                  border: "1px solid #e5e7eb",
-                  color: "#6b7280",
-                  cursor: "pointer",
-                  fontSize: "18px",
-                  boxShadow: "0 4px 20px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.04)",
-                  transition: "all 0.15s ease",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = "translateY(-1px)";
-                  e.currentTarget.style.boxShadow = "0 6px 25px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(0, 0, 0, 0.04)";
-                  e.currentTarget.style.color = "#374151";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = "translateY(0)";
-                  e.currentTarget.style.boxShadow = "0 4px 20px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.04)";
-                  e.currentTarget.style.color = "#6b7280";
+                  padding: '0px 20px',
+                  background: '#ffffff',
+                  borderTop: '1px solid #e5e7eb',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'stretch',
+                  gap: 0,
+                  position: 'relative',
+                  minHeight: 100,
+                  height: 240,
+                  boxSizing: 'border-box',
+                  marginTop: 0, // reset form margin
+                  justifyContent: 'flex-start',
                 }}
               >
-                ✨
-              </button>
-            )}
-          </div>
-        </>
+                <textarea
+                  value={chatInput}
+                  onChange={e => setChatInput(e.target.value)}
+                  placeholder="Ask about your room design..."
+                  style={{
+                    width: '100%',
+                    height: '75%',
+                    minHeight: '120px',
+                    maxHeight: '300px',
+                    borderRadius: 0,
+                    border: '1.5px solid #e5e7eb',
+                    fontSize: '12px',
+                    outline: 'none',
+                    background: '#f9fafb',
+                    color: '#222',
+                    boxShadow: 'none',
+                    transition: 'border-color 0.15s, box-shadow 0.15s',
+                    resize: 'vertical',
+                    padding: '18px',
+                    marginTop: 10, // move textarea down
+                    marginBottom: 0,
+                    lineHeight: 1.7,
+                  }}
+                  onFocus={e => {
+                    e.target.style.borderColor = '#facc15';
+                    e.target.style.boxShadow = '0 0 0 2px rgba(250,204,21,0.15)';
+                  }}
+                  onBlur={e => {
+                    e.target.style.borderColor = '#e5e7eb';
+                    e.target.style.boxShadow = 'none';
+                  }}
+                  disabled={isLoading}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      handleChatSubmit(e);
+                    }
+                  }}
+                />
+                <button
+                  type="submit"
+                  disabled={isLoading || !chatInput.trim()}
+                  style={{
+                    width: '100%',
+                    marginTop: 5,
+                    padding: '10px 0', // less height
+                    background: isLoading || !chatInput.trim()
+                      ? '#f3e8a1'
+                      : '#fad600',
+                    color: isLoading || !chatInput.trim() ? '#bdbdbd' : '#18181b',
+                    border: 'none',
+                    fontWeight: 700,
+                    fontSize: 16,
+                    cursor: isLoading || !chatInput.trim() ? 'not-allowed' : 'pointer',
+                    boxShadow: isLoading || !chatInput.trim() ? 'none' : '0 2px 8px #facc1422',
+                    transition: 'background 0.15s, color 0.15s',
+                  }}
+                >
+                  Send
+                </button>
+              </form>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

@@ -2,9 +2,10 @@ import "./globals.css";
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import { AuthProvider } from "@/context/AuthContext";
-import Navbar from "@/components/Navbar";
+import NavbarWrapper from "@/components/NavbarWrapper";
 
 const inter = Inter({ subsets: ["latin"] });
+
 
 export const metadata: Metadata = {
   title: "Company | AI Home Decor",
@@ -24,18 +25,17 @@ export default function RootLayout({
       </head>
       <body
         style={{
-          background: `
-            radial-gradient(circle at 40% 90%, rgba(255, 69, 0, 0.8) 0%, transparent 60%),
-            radial-gradient(circle at 75% 85%, rgba(239, 68, 68, 0.6) 0%, transparent 50%),
-            radial-gradient(circle at 60% 100%, rgba(59, 130, 246, 0.4) 0%, transparent 70%),
-            #f8fafc
-          `,
-          fontFamily: 'FamilyFont, FamilyFont Fallback, sans-serif',
+          background: "#ffffff",
+          color: "#000000",
+          fontFamily: "Inter, system-ui, -apple-system, sans-serif",
+          minHeight: "100vh",
+          position: 'relative',
+          overflow: 'hidden'
         }}
         className={inter.className}
       >
         <AuthProvider>
-          <Navbar />
+          <NavbarWrapper />
           {children}
         </AuthProvider>
       </body>

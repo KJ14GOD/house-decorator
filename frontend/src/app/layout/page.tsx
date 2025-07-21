@@ -1,5 +1,5 @@
 "use client";
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, Suspense } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Canvas } from "@react-three/fiber";
@@ -10,6 +10,7 @@ import { useAuth } from "@/context/AuthContext";
 import { db } from "@/lib/firebase/firebase";
 import { collection, addDoc, query, where, getDocs, serverTimestamp, doc, updateDoc, deleteDoc } from "firebase/firestore";
 import { analyzeAndBuildRoomModel, RoomModelResult } from '@/lib/prebuild/imageTo3D';
+import LayoutContentWrapper from "@/components/LayoutContentWrapper";
 
 // This is a proper room preview for the cards
 function RoomBoxPreview({ width, length, height, floorColor, ceilingColor, wallFrontColor, wallBackColor, wallLeftColor, wallRightColor, blocks }: {
@@ -143,7 +144,8 @@ export default function LayoutPage() {
 
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [isChatLoading, setIsChatLoading] = useState(false);
+  const [isModelsLoading, setIsModelsLoading] = useState(true);
   
   const [infoPopup, setInfoPopup] = useState<{ modelId: string; message: string } | null>(null);
 
@@ -153,7 +155,7 @@ export default function LayoutPage() {
         setSavedModels([]);
         return;
       }
-      setIsLoading(true);
+      setIsModelsLoading(true);
       const q = query(collection(db, "rooms"), where("userId", "==", user.uid));
       try {
         const querySnapshot = await getDocs(q);
@@ -171,7 +173,7 @@ export default function LayoutPage() {
       } catch (error) {
         console.error("Error fetching saved models: ", error);
       } finally {
-        setIsLoading(false);
+        setIsModelsLoading(false);
       }
     };
 
@@ -328,7 +330,7 @@ export default function LayoutPage() {
       setShowAuthModal(true);
       return;
     }
-    if (!message || !message.trim() || isLoading) return;
+    if (!message || !message.trim() || isChatLoading) return;
 
     const newMessages: ChatMessage[] = [
       ...chatMessages,
@@ -341,7 +343,7 @@ export default function LayoutPage() {
     const currentHeight = height;
 
     setChatInput('');
-    setIsLoading(true);
+    setIsChatLoading(true);
 
     try {
       const timezoneOffset = new Date().getTimezoneOffset();
@@ -450,13 +452,13 @@ export default function LayoutPage() {
         },
       ]);
     } finally {
-      setIsLoading(false);
+      setIsChatLoading(false);
     }
   };
 
   const handleChatSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!chatInput || !chatInput.trim() || isLoading) return;
+    if (!chatInput || !chatInput.trim() || isChatLoading) return;
     submitMessage(chatInput);
   };
 
@@ -623,20 +625,7 @@ export default function LayoutPage() {
 
 
   return (
-    <div style={{ 
-        marginLeft: 0, 
-        transition: "margin-left 0.3s ease",
-        minHeight: "100vh", 
-        background: `
-          radial-gradient(circle at 40% 90%, rgba(255, 69, 0, 0.8) 0%, transparent 60%),
-          radial-gradient(circle at 75% 85%, rgba(239, 68, 68, 0.6) 0%, transparent 50%),
-          radial-gradient(circle at 60% 100%, rgba(59, 130, 246, 0.4) 0%, transparent 70%),
-          #f8fafc
-        `,
-        color: "#222", 
-        position: "relative", 
-        overflow: "hidden"
-      }}>
+    <LayoutContentWrapper>
       {showAuthModal && (
         <div style={{
           position: 'fixed',
@@ -728,12 +717,10 @@ export default function LayoutPage() {
       {/* Notion-style greeting and single card with mode toggle chips */}
       
         <div style={{
-          minHeight: '100vh',
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
           justifyContent: 'center',
-          padding: '0px 0px 200px 16px',
         }}>
           <div style={{
             display: 'flex',
@@ -844,7 +831,7 @@ export default function LayoutPage() {
               {mode === 'ask' ? (
                 <div style={{ position: 'relative', width: '100%' }}>
                   <div style={{ width: '100%', minHeight: 20, display: 'flex', flexDirection: 'column', gap: 8, justifyContent: 'flex-end', alignItems: 'flex-start', marginBottom: 24 }}>
-                    {chatMessages.length === 0 && !isLoading && (
+                    {chatMessages.length === 0 && !isChatLoading && (
                       <div style={{ width: '100%', marginBottom: 32, animation: 'fadeIn 0.5s ease-in-out' }}>
                         <p style={{ textAlign: 'center', fontSize: 14, color: '#4b5563', marginBottom: 16, fontWeight: 500 }}>Try one of these prompts</p>
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -966,7 +953,7 @@ export default function LayoutPage() {
                              )}
                         </div>
                       ))}
-                      {isLoading && (
+                      {isChatLoading && (
                         <div style={{
                           borderRadius: '8px',
                           background: '#f3f4f6',
@@ -1032,12 +1019,12 @@ export default function LayoutPage() {
                             e.target.parentElement.style.boxShadow = 'none';
                           }
                         }}
-                        disabled={isLoading}
+                        disabled={isChatLoading}
                       />
                       {/* Send button bottom right inside input bar */}
                       <button
                         type="submit"
-                        disabled={isLoading || !(chatInput || '').trim()}
+                        disabled={isChatLoading || !(chatInput || '').trim()}
                         style={{
                           position: 'absolute',
                           right: 16,
@@ -1046,30 +1033,31 @@ export default function LayoutPage() {
                           width: '44px',
                           height: '44px',
                           borderRadius: '50%',
-                          background: '#fef08a',
+                          background: (isChatLoading || !(chatInput || '').trim()) ? '#fef08a' : '#facc15',
                           border: 'none',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
                           boxShadow: 'none',
-                          cursor: 'not-allowed',
-                          transition: 'background 0.15s, box-shadow 0.15s',
+                          cursor: (isChatLoading || !(chatInput || '').trim()) ? 'default' : 'pointer',
+                          opacity: (isChatLoading || !(chatInput || '').trim()) ? 0.8 : 1,
+                          transition: 'background 0.15s, box-shadow 0.15s, opacity 0.15s',
                           zIndex: 2,
+                          pointerEvents: (isChatLoading || !(chatInput || '').trim()) ? 'none' : 'auto',
                         }}
-                        tabIndex={-1}
                         onMouseEnter={e => {
-                          if (!(isLoading || !(chatInput || '').trim())) {
+                          if (!(isChatLoading || !(chatInput || '').trim())) {
                             e.currentTarget.style.background = '#fde047';
                           }
                         }}
                         onMouseLeave={e => {
-                          if (!(isLoading || !(chatInput || '').trim())) {
+                          if (!(isChatLoading || !(chatInput || '').trim())) {
                             e.currentTarget.style.background = '#facc15';
                           }
                         }}
                       >
                         <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-                          <path d="M4 10H16M16 10L11 5M16 10L11 15" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                          <path d="M4 10H16M16 10L11 5M16 10L11 15" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" opacity={(isChatLoading || !(chatInput || '').trim()) ? 0.7 : 1} />
                         </svg>
                       </button>
                     </form>
@@ -1369,7 +1357,7 @@ export default function LayoutPage() {
     <div style={{
       width: '100%',
       maxWidth: 1400,
-      margin: '-160px auto 0 auto',
+      margin: 'clamp(48px, 6vw, 96px) auto 0 auto',
       padding: '32px 48px 64px 48px',
       background: '#000000',
       borderRadius: 24,
@@ -1452,7 +1440,7 @@ export default function LayoutPage() {
         gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
         gap: 24,
       }}>
-        {sortedModels.map(model => (
+        {sortedModels.map((model, index) => (
           <div key={model.id} style={{
             background: '#fff',
             borderRadius: 16,
@@ -1517,24 +1505,58 @@ export default function LayoutPage() {
                 </div>
               </div>
             )}
-            <div style={{ height: 200, background: '#f9fafb' }}>
-              <Canvas key={`${model.id}-${sortBy}`} camera={{ position: [0, 2, 5], fov: 50 }}>
-                <ambientLight intensity={0.8} />
-                <directionalLight position={[5, 10, 7]} intensity={0.8} />
-                <RoomBoxPreview
-                  width={model.width || 12}
-                  length={model.length || 12}
-                  height={model.height || 8}
-                  floorColor={model.floorColor || '#e3e3e3'}
-                  ceilingColor={model.ceilingColor || '#e3e3e3'}
-                  wallFrontColor={model.wallFrontColor || '#e3e3e3'}
-                  wallBackColor={model.wallBackColor || '#e3e3e3'}
-                  wallLeftColor={model.wallLeftColor || '#e3e3e3'}
-                  wallRightColor={model.wallRightColor || '#e3e3e3'}
-                  blocks={model.blocks || []}
-                />
-                 <OrbitControls enableZoom={false} enablePan={false} autoRotate autoRotateSpeed={0.7} />
-              </Canvas>
+            <div style={{ height: 200, background: '#f9fafb', position: 'relative' }}>
+              {model.width && model.length && model.height ? (
+                <Suspense fallback={
+                  <div style={{ 
+                    height: '100%', 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    justifyContent: 'center',
+                    background: '#f9fafb',
+                    color: '#6b7280',
+                    fontSize: '14px'
+                  }}>
+                    Loading preview...
+                  </div>
+                }>
+                                  <Canvas 
+                  key={`${model.id}-${sortBy}`} 
+                  camera={{ 
+                    position: [0, Math.max(3, Math.max(model.width || 12, model.length || 12) * 0.6), 0], 
+                    fov: 45 
+                  }}
+                >
+                  <ambientLight intensity={0.8} />
+                  <directionalLight position={[0, 10, 0]} intensity={0.8} />
+                  <RoomBoxPreview
+                    width={model.width || 12}
+                    length={model.length || 12}
+                    height={model.height || 8}
+                    floorColor={model.floorColor || '#e3e3e3'}
+                    ceilingColor={model.ceilingColor || '#e3e3e3'}
+                    wallFrontColor={model.wallFrontColor || '#e3e3e3'}
+                    wallBackColor={model.wallBackColor || '#e3e3e3'}
+                    wallLeftColor={model.wallLeftColor || '#e3e3e3'}
+                    wallRightColor={model.wallRightColor || '#e3e3e3'}
+                    blocks={model.blocks || []}
+                  />
+                  <OrbitControls enableZoom={false} enablePan={false} enableRotate={false} autoRotate={false} />
+                </Canvas>
+                </Suspense>
+              ) : (
+                <div style={{ 
+                  height: '100%', 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  justifyContent: 'center',
+                  background: '#f9fafb',
+                  color: '#6b7280',
+                  fontSize: '14px'
+                }}>
+                  ⚠️ Invalid room data
+                </div>
+              )}
             </div>
             <div style={{ padding: 16 }}>
               {editingModelId === model.id ? (
@@ -1567,6 +1589,6 @@ export default function LayoutPage() {
         ))}
       </div>
     </div>
-    </div>
+    </LayoutContentWrapper>
   );
 } 
