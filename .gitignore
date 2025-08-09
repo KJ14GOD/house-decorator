@@ -1,4 +1,14 @@
 # Ignore YOLO weights and other large files
 *.pt
 backend/clip_server/yolov8x.pt
-backend/clip_server/yolov8n.pt
+backend/clip_server/yolov8n.pt.DS_Store
+node_modules/
+.next/
+out/
+__pycache__/
+*.pyc
+.env
+venv/
+**/venv/**
+backend/venv/
+backend/multi_agent_system/venv/
