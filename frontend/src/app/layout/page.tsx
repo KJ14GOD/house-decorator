@@ -156,11 +156,40 @@ export default function LayoutPage() {
         return;
       }
       setIsModelsLoading(true);
-      const q = query(collection(db, "rooms"), where("userId", "==", user.uid));
+      
       try {
-        const querySnapshot = await getDocs(q);
-        const models = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        setSavedModels(models);
+        // Fetch rooms owned by the user
+        const ownedRoomsQuery = query(collection(db, "rooms"), where("userId", "==", user.uid));
+        const ownedRoomsSnapshot = await getDocs(ownedRoomsQuery);
+        const ownedRooms = ownedRoomsSnapshot.docs.map(doc => ({ 
+          id: doc.id, 
+          ...doc.data(),
+          isOwner: true 
+        }));
+
+        // Fetch rooms shared with the user
+        const sharedRoomsQuery = query(collection(db, "rooms"), where("sharedWithEmails", "array-contains", user.email));
+        const sharedRoomsSnapshot = await getDocs(sharedRoomsQuery);
+        const sharedRooms = sharedRoomsSnapshot.docs.map(doc => {
+          const data = doc.data();
+          // Find the user's permission level
+          const sharedInfo = data.sharedWith?.find((s: any) => s.email === user.email);
+          return {
+            id: doc.id,
+            ...data,
+            isOwner: false,
+            userPermission: sharedInfo?.permission || 'view'
+          };
+        });
+
+        // Combine and sort by creation date
+        const allRooms = [...ownedRooms, ...sharedRooms].sort((a, b) => {
+          const aTime = (a as any).createdAt?.toDate?.() || new Date(0);
+          const bTime = (b as any).createdAt?.toDate?.() || new Date(0);
+          return bTime.getTime() - aTime.getTime();
+        });
+
+        setSavedModels(allRooms);
 
         // Check for info message in localStorage
         const infoMessage = localStorage.getItem('infoMessage');
@@ -181,9 +210,19 @@ export default function LayoutPage() {
   }, [user]);
 
   const navigateToModel = (roomState: any) => {
+    let permission = 'edit'; // Owner has edit permission
+    if (user && roomState.userId !== user.uid) {
+      const sharedInfo = roomState.sharedWith?.find((s: any) => s.email === user.email);
+      if (sharedInfo) {
+        permission = sharedInfo.permission;
+      }
+    }
+
     // Ensure chat history is properly mapped from chatHistory to chatMessages
     const formattedRoomState = {
       ...roomState,
+      userId: roomState.userId, // Ensure userId is included
+      permission, // Add permission to the state
       chatMessages: roomState.chatHistory || roomState.chatMessages || [],
       meshy_model_url: roomState.meshy_model_url || (roomState.model_data ? roomState.model_data.meshy_model_url : null),
       name: roomState.name || 'Untitled Room',
@@ -200,6 +239,12 @@ export default function LayoutPage() {
     };
     localStorage.setItem('roomState', JSON.stringify(formattedRoomState));
     router.push('/model');
+  };
+
+  const openPinboard = (room: any) => {
+    const id = room?.id || room?.docId || '';
+    const qs = id ? `?roomId=${encodeURIComponent(id)}` : '';
+    window.open(`/pinboard${qs}`, '_blank', 'noopener,noreferrer');
   };
 
   const handleUpdateName = async (id: string) => {
@@ -900,54 +945,70 @@ export default function LayoutPage() {
                                    {msg.content.preamble}
                                  </p>
                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                   {msg.content.rooms.map((room: any) => (
-                                     <button
-                                       key={room.id}
-                                       onClick={() => navigateToModel(room)}
-                                       style={{
-                                         display: 'flex',
-                                         alignItems: 'center',
-                                         gap: '12px',
-                                         padding: '12px',
-                                         borderRadius: '10px',
-                                         background: '#f9fafb',
-                                         border: '1px solid #f3f4f6',
-                                         cursor: 'pointer',
-                                         textAlign: 'left',
-                                         transition: 'background 0.2s, border-color 0.2s',
-                                         width: '100%',
-                                       }}
-                                       onMouseEnter={(e) => {
-                                           e.currentTarget.style.background = '#f3f4f6';
-                                           e.currentTarget.style.borderColor = '#e5e7eb';
-                                       }}
-                                       onMouseLeave={(e) => {
-                                           e.currentTarget.style.background = '#f9fafb';
-                                           e.currentTarget.style.borderColor = '#f3f4f6';
-                                       }}
-                                     >
-                                       <div style={{ 
-                                           background: '#eef2ff', 
-                                           color: '#4f46e5', 
-                                           padding: '8px', 
-                                           borderRadius: '6px', 
-                                           display: 'flex', 
-                                           alignItems: 'center', 
-                                           justifyContent: 'center' 
-                                       }}>
-                                         <Folder size={20} />
-                                       </div>
-                                       <div style={{ flex: 1 }}>
-                                         <p style={{ fontWeight: 600, color: '#1f2937', margin: 0, fontSize: '15px' }}>
-                                           {room.name}
-                                         </p>
-                                         <p style={{ fontSize: '13px', color: '#6b7280', margin: '4px 0 0' }}>
-                                           {room.width} x {room.length} x {room.height} ft • Created {new Date(room.createdAt._seconds * 1000).toLocaleDateString()}
-                                         </p>
-                                       </div>
-                                       <ChevronRight size={18} color="#9ca3af" />
-                                     </button>
-                                   ))}
+                                  {msg.content.rooms.map((room: any) => (
+                                    <div key={room.id} style={{ display: 'flex', gap: 8 }}>
+                                      <button
+                                        onClick={() => navigateToModel(room)}
+                                        style={{
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          gap: '12px',
+                                          padding: '12px',
+                                          borderRadius: '10px',
+                                          background: '#f9fafb',
+                                          border: '1px solid #f3f4f6',
+                                          cursor: 'pointer',
+                                          textAlign: 'left',
+                                          transition: 'background 0.2s, border-color 0.2s',
+                                          width: '100%',
+                                          flex: 1,
+                                        }}
+                                        onMouseEnter={(e) => {
+                                            e.currentTarget.style.background = '#f3f4f6';
+                                            e.currentTarget.style.borderColor = '#e5e7eb';
+                                        }}
+                                        onMouseLeave={(e) => {
+                                            e.currentTarget.style.background = '#f9fafb';
+                                            e.currentTarget.style.borderColor = '#f3f4f6';
+                                        }}
+                                      >
+                                        <div style={{ 
+                                            background: '#eef2ff', 
+                                            color: '#4f46e5', 
+                                            padding: '8px', 
+                                            borderRadius: '6px', 
+                                            display: 'flex', 
+                                            alignItems: 'center', 
+                                            justifyContent: 'center' 
+                                        }}>
+                                          <Folder size={20} />
+                                        </div>
+                                        <div style={{ flex: 1 }}>
+                                          <p style={{ fontWeight: 600, color: '#1f2937', margin: 0, fontSize: '15px' }}>
+                                            {room.name}
+                                          </p>
+                                          <p style={{ fontSize: '13px', color: '#6b7280', margin: '4px 0 0' }}>
+                                            {room.width} x {room.length} x {room.height} ft • Created {new Date(room.createdAt._seconds * 1000).toLocaleDateString()}
+                                          </p>
+                                        </div>
+                                        <ChevronRight size={18} color="#9ca3af" />
+                                      </button>
+                                      <button
+                                        onClick={() => openPinboard(room)}
+                                        style={{
+                                          border: '1px solid #e5e7eb',
+                                          background: '#fff',
+                                          color: '#111827',
+                                          borderRadius: 8,
+                                          padding: '12px 10px',
+                                          fontSize: 12,
+                                          cursor: 'pointer'
+                                        }}
+                                      >
+                                        Pinboard
+                                      </button>
+                                    </div>
+                                  ))}
                                  </div>
                                </div>
                              )}
@@ -1454,6 +1515,7 @@ export default function LayoutPage() {
            onClick={() => {
             const roomState = {
               id: model.id,
+              userId: model.userId, // Include userId
               name: model.name,
               width: model.width,
               length: model.length,
@@ -1466,6 +1528,7 @@ export default function LayoutPage() {
               wallRightColor: model.wallRightColor,
               blocks: model.blocks || [],
               chatMessages: model.chatHistory || [],
+              permission: model.userPermission || (model.isOwner ? 'edit' : 'view'), // Include permission
             };
             localStorage.setItem('roomState', JSON.stringify(roomState));
             router.push('/model');
@@ -1573,14 +1636,57 @@ export default function LayoutPage() {
               ) : (
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
-                    <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: '#222' }}>{model.name}</h3>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                      <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: '#222' }}>{model.name}</h3>
+                      {model.isOwner ? (
+                        <span style={{ 
+                          background: '#facc15', 
+                          color: '#1f2937', 
+                          padding: '2px 8px', 
+                          borderRadius: 12, 
+                          fontSize: 11, 
+                          fontWeight: 600 
+                        }}>
+                          Owner
+                        </span>
+                      ) : (
+                        <span style={{ 
+                          background: '#e5e7eb', 
+                          color: '#6b7280', 
+                          padding: '2px 8px', 
+                          borderRadius: 12, 
+                          fontSize: 11, 
+                          fontWeight: 600 
+                        }}>
+                          {model.userPermission === 'edit' ? 'Editor' : 'Viewer'}
+                        </span>
+                      )}
+                    </div>
                     <p style={{ margin: '4px 0 0', fontSize: 13, color: '#6b7280' }}>
                       {model.width}ft x {model.length}ft x {model.height}ft
                     </p>
                   </div>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button onClick={(e) => { e.stopPropagation(); setEditingModelId(model.id); setNewModelName(model.name); }} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#6b7280' }}><Pencil size={18} /></button>
-                    <button onClick={(e) => { e.stopPropagation(); setDeletingModelId(model.id); }} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#6b7280' }}><Trash2 size={18} /></button>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); openPinboard(model); }}
+                      style={{
+                        background: '#fff',
+                        border: '1px solid #e5e7eb',
+                        color: '#111827',
+                        borderRadius: 8,
+                        padding: '6px 10px',
+                        fontSize: 12,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      Pinboard
+                    </button>
+                    {model.isOwner && (
+                      <>
+                        <button onClick={(e) => { e.stopPropagation(); setEditingModelId(model.id); setNewModelName(model.name); }} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#6b7280' }}><Pencil size={18} /></button>
+                        <button onClick={(e) => { e.stopPropagation(); setDeletingModelId(model.id); }} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#6b7280' }}><Trash2 size={18} /></button>
+                      </>
+                    )}
                   </div>
                 </div>
               )}

@@ -2,12 +2,16 @@
 import { useState, useRef, useEffect, useCallback, Suspense } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Canvas, useThree } from "@react-three/fiber";
-import { OrbitControls, Edges, PointerLockControls, Text, useGLTF } from "@react-three/drei";
+import { Canvas, useThree, useFrame } from "@react-three/fiber";
+import { OrbitControls, Edges, PointerLockControls, Text, useGLTF, PerspectiveCamera, Environment } from "@react-three/drei";
 import * as THREE from 'three';
 import { ChevronUp, ChevronDown, Pencil, RotateCcw, RotateCw } from 'lucide-react';
 import { db } from "@/lib/firebase/firebase";
-import { doc, updateDoc } from "firebase/firestore";
+import { doc, updateDoc, getDoc, arrayUnion, arrayRemove } from "firebase/firestore";
+import { TransformControls } from "@react-three/drei";
+import ShareModal, { ShareUser, LinkSharing } from "@/components/ShareModal";
+import { useAuth } from '@/context/AuthContext';
+import MultiAgentProgress from '@/components/MultiAgentProgress';
 
 // Helper function to create subtle procedural textures
 const createProceduralTexture = (type: 'wall' | 'floor' | 'ceiling') => {
@@ -140,6 +144,7 @@ function RoomBox({ width, length, height, floorColor, ceilingColor, wallFrontCol
     height: number, 
     depth: number,
     color: string,
+    rotation: number,
     created: Date
   }>;
   previewBlock?: {x: number, y: number, z: number, width: number, height: number, depth: number} | null;
@@ -176,11 +181,13 @@ function RoomBox({ width, length, height, floorColor, ceilingColor, wallFrontCol
             <meshStandardMaterial 
               color={wallFrontColor} 
               side={THREE.DoubleSide}
-              roughness={0.8}
-              metalness={0.0}
-              normalMap={wallTexture}
-              normalScale={new THREE.Vector2(0.15, 0.15)}
+              roughness={0.15}
+              metalness={0}
+              opacity={1}
+              emissive={wallFrontColor}
+              emissiveIntensity={0.15}
             />
+            
           </mesh>
         );
       }
@@ -198,9 +205,11 @@ function RoomBox({ width, length, height, floorColor, ceilingColor, wallFrontCol
             <meshStandardMaterial 
               color={wallBackColor} 
               side={THREE.DoubleSide}
-              roughness={0.8}
-              metalness={0.0}
-              normalScale={new THREE.Vector2(0.1, 0.1)}
+              roughness={0.15}
+              metalness={0}
+              opacity={1}
+              emissive={wallBackColor}
+              emissiveIntensity={0.15}
             />
           </mesh>
         );
@@ -224,10 +233,13 @@ function RoomBox({ width, length, height, floorColor, ceilingColor, wallFrontCol
             <meshStandardMaterial 
               color={wallLeftColor} 
               side={THREE.DoubleSide}
-              roughness={0.8}
-              metalness={0.0}
-              normalScale={new THREE.Vector2(0.1, 0.1)}
+              roughness={0.15}
+              metalness={0}
+              opacity={1}
+              emissive={wallLeftColor}
+              emissiveIntensity={0.15}
             />
+            
           </mesh>
         );
       }
@@ -245,10 +257,13 @@ function RoomBox({ width, length, height, floorColor, ceilingColor, wallFrontCol
             <meshStandardMaterial 
               color={wallRightColor} 
               side={THREE.DoubleSide}
-              roughness={0.8}
-              metalness={0.0}
-              normalScale={new THREE.Vector2(0.1, 0.1)}
+              roughness={0.15}
+              metalness={0}
+              opacity={1}
+              emissive={wallRightColor}
+              emissiveIntensity={0.15}
             />
+            
           </mesh>
         );
       }
@@ -274,11 +289,13 @@ function RoomBox({ width, length, height, floorColor, ceilingColor, wallFrontCol
             <planeGeometry args={[actualSegmentSizeX, actualSegmentSizeZ]} />
             <meshStandardMaterial 
               color={floorColor}
-              roughness={0.6}
-              metalness={0.0}
-              normalMap={floorTexture}
-              normalScale={new THREE.Vector2(0.25, 0.25)}
+              roughness={0.15}
+              metalness={0}
+              opacity={1}
+              emissive={floorColor}
+              emissiveIntensity={0.15}
             />
+            
           </mesh>
         );
       }
@@ -303,9 +320,11 @@ function RoomBox({ width, length, height, floorColor, ceilingColor, wallFrontCol
             <planeGeometry args={[actualSegmentSizeX, actualSegmentSizeZ]} />
             <meshStandardMaterial 
               color={ceilingColor}
-              roughness={0.9}
-              metalness={0.0}
-              normalScale={new THREE.Vector2(0.05, 0.05)}
+              roughness={0.15}
+              metalness={0}
+              opacity={1}
+              emissive={ceilingColor}
+              emissiveIntensity={0.15}
             />
           </mesh>
         );
@@ -405,7 +424,7 @@ function RoomBox({ width, length, height, floorColor, ceilingColor, wallFrontCol
           (block.x + block.width/2) * scale - w/2,
           (block.y + block.height/2) * scale,
           (block.z + block.depth/2) * scale - l/2
-        ]} castShadow receiveShadow>
+        ]} rotation={[0, block.rotation || 0, 0]} castShadow receiveShadow>
           <boxGeometry args={[block.width * scale, block.height * scale, block.depth * scale]} />
           <meshStandardMaterial 
             color={block.color} 
@@ -450,6 +469,109 @@ const VIEWS = [
   { key: "inside", label: "Inside", icon: "👁" },
 ];
 
+// Clarification Component for multi-select questions
+interface ClarificationComponentProps {
+  message: string;
+  questions: Array<{ text: string; action: string }>;
+  onSubmit: (selectedActions: string[]) => void;
+}
+
+const ClarificationComponent: React.FC<ClarificationComponentProps> = ({ message, questions, onSubmit }) => {
+  const [selectedOptions, setSelectedOptions] = useState<Set<number>>(new Set());
+
+  const toggleOption = (index: number) => {
+    const newSelected = new Set(selectedOptions);
+    if (newSelected.has(index)) {
+      newSelected.delete(index);
+    } else {
+      newSelected.add(index);
+    }
+    setSelectedOptions(newSelected);
+  };
+
+  const handleSubmit = () => {
+    const selectedActions = Array.from(selectedOptions).map(index => questions[index].action);
+    if (selectedActions.length > 0) {
+      onSubmit(selectedActions);
+    }
+  };
+
+  return (
+    <div style={{
+      background: '#fff',
+      border: '1px solid #e5e7eb',
+      borderRadius: 8,
+      padding: '16px',
+      marginBottom: 8,
+      boxShadow: '0 1px 4px rgba(0,0,0,0.04)'
+    }}>
+      <div style={{
+        fontSize: 14,
+        color: '#374151',
+        marginBottom: 12,
+        fontWeight: 500
+      }}>
+        {message}
+      </div>
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        marginBottom: 16
+      }}>
+        {questions.map((question, qIndex) => (
+          <label
+            key={qIndex}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              background: selectedOptions.has(qIndex) ? '#f0f9ff' : '#f8fafc',
+              border: `1px solid ${selectedOptions.has(qIndex) ? '#0ea5e9' : '#e2e8f0'}`,
+              borderRadius: 6,
+              padding: '12px 16px',
+              fontSize: 13,
+              color: '#374151',
+              cursor: 'pointer',
+              textAlign: 'left' as const,
+              transition: 'all 0.2s'
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={selectedOptions.has(qIndex)}
+              onChange={() => toggleOption(qIndex)}
+              style={{
+                width: 16,
+                height: 16,
+                accentColor: '#0ea5e9'
+              }}
+            />
+            <span>{question.text}</span>
+          </label>
+        ))}
+      </div>
+      <button
+        onClick={handleSubmit}
+        disabled={selectedOptions.size === 0}
+        style={{
+          background: selectedOptions.size > 0 ? '#0ea5e9' : '#9ca3af',
+          color: '#fff',
+          border: 'none',
+          borderRadius: 6,
+          padding: '10px 20px',
+          fontSize: 13,
+          fontWeight: 500,
+          cursor: selectedOptions.size > 0 ? 'pointer' : 'not-allowed',
+          transition: 'all 0.2s'
+        }}
+      >
+        Apply Changes ({selectedOptions.size} selected)
+      </button>
+    </div>
+  );
+};
+
 export default function ModelPage() {
   const router = useRouter();
 
@@ -462,6 +584,8 @@ export default function ModelPage() {
   const [roomId, setRoomId] = useState<string | null>(null);
   const [roomName, setRoomName] = useState("Untitled Room");
   const [isEditingName, setIsEditingName] = useState(false);
+  const [userPermission, setUserPermission] = useState<'edit' | 'view'>('edit');
+  const [isOwner, setIsOwner] = useState(true); // Default to true until we determine otherwise
 
   // Load meshyModelUrl from localStorage on mount
   useEffect(() => {
@@ -500,11 +624,15 @@ export default function ModelPage() {
     height: number, 
     depth: number,
     color: string,
+    rotation: number,
     created: Date
   }>>([]);
   const [blockConfig, setBlockConfig] = useState({
     width: 2, height: 2, depth: 2, x: 0, y: 0, z: 0
   });
+
+  const [rotateMode, setRotateMode] = useState(false);
+
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
 
   const [rulerMode, setRulerMode] = useState(false);
@@ -538,6 +666,7 @@ export default function ModelPage() {
       height: number;
       depth: number;
       color: string;
+      rotation: number;
     }>;
   };
 
@@ -570,6 +699,7 @@ export default function ModelPage() {
         height: block.height,
         depth: block.depth,
         color: block.color,
+        rotation: block.rotation,
       })),
     };
   }, [roomName, width, length, height, floorColor, ceilingColor, wallFrontColor, wallBackColor, wallLeftColor, wallRightColor, blocks]);
@@ -601,7 +731,8 @@ export default function ModelPage() {
     setWallRightColor(snapshot.wallRightColor);
     setBlocks(snapshot.blocks.map(block => ({
       ...block,
-      created: new Date(), // Restore creation date for compatibility
+      rotation: block.rotation ?? 0,
+      created: new Date(),
     })));
   }, []);
 
@@ -727,6 +858,18 @@ export default function ModelPage() {
             setBlocks(roomState.blocks || []);
             setChatMessages(roomState.chatMessages || []);
             setMeshyModelUrl(roomState.meshy_model_url || null);
+            setSharedWith(roomState.sharedWith || []);
+            
+            // Determine user's permission level
+            const isOwner = roomState.userId === user?.uid || !roomState.userId; // If no userId, assume owner (new room)
+            const userPermission = roomState.permission || (isOwner ? 'edit' : 'view');
+            setIsOwner(isOwner);
+            setUserPermission(userPermission);
+            
+            // Load shared users from Firebase if roomId exists
+            if (roomState.id) {
+                loadSharedUsers(roomState.id);
+            }
         } catch (error) {
             console.error('Error loading room state from localStorage:', error);
             // If there's an error, try to load from backup
@@ -747,6 +890,12 @@ export default function ModelPage() {
                     setWallRightColor(backupState.wallRightColor);
                     setBlocks(backupState.blocks || []);
                     setChatMessages(backupState.chatMessages || []);
+                    setSharedWith(backupState.sharedWith || []);
+                    
+                    // Load shared users from Firebase if roomId exists
+                    if (backupState.id) {
+                        loadSharedUsers(backupState.id);
+                    }
                 } catch (backupError) {
                     console.error('Error loading backup room state:', backupError);
                 }
@@ -755,6 +904,35 @@ export default function ModelPage() {
     }
     setIsLoaded(true);
   }, []);
+
+  // Function to load shared users from Firebase
+  const loadSharedUsers = async (roomId: string) => {
+    if (!user) return;
+    
+    try {
+      const roomDoc = await getDoc(doc(db, "rooms", roomId));
+      if (roomDoc.exists()) {
+        const roomData = roomDoc.data();
+        if (roomData.sharedWith && Array.isArray(roomData.sharedWith)) {
+          // Load shared users with their permissions
+          console.log('Loading shared users:', roomData.sharedWith);
+          setSharedWith(roomData.sharedWith);
+        } else if (roomData.sharedWithEmails && Array.isArray(roomData.sharedWithEmails)) {
+          // Legacy support: convert old sharedWithEmails to new format
+          const sharedUsers: ShareUser[] = roomData.sharedWithEmails.map((email: string) => ({
+            email,
+            permission: "view"
+          }));
+          console.log('Loading legacy shared users:', sharedUsers);
+          setSharedWith(sharedUsers);
+        } else {
+          console.log('No shared users found in room data');
+        }
+      }
+    } catch (error) {
+      console.error('Error loading shared users:', error);
+    }
+  };
 
   const findSnapPoint = useCallback((intersectPoint: THREE.Vector3, threshold = 0.2): THREE.Vector3 => {
     if (!sceneRef.current) return intersectPoint;
@@ -919,58 +1097,28 @@ export default function ModelPage() {
   };
 
   const [chatbotOpen, setChatbotOpen] = useState(true);
-  const [chatMessages, setChatMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string; agent?: string; confidence?: number; reasoning?: string }>>([]);
+  const [chatMessages, setChatMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string; agent?: string; confidence?: number; reasoning?: string; amazonResults?: any; showAllProducts?: boolean }>>([]);
   const [chatInput, setChatInput] = useState('');
+  
+  // Agentic system state
+  const [isAgenticProcessing, setIsAgenticProcessing] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [multiAgentMode, setMultiAgentMode] = useState(false);
   const [chatbotWidth, setChatbotWidth] = useState(360);
   const [chatbotHeight, setChatbotHeight] = useState(480);
   const chatbotRef = useRef<HTMLDivElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Function to save room state to localStorage
-  const saveRoomStateToStorage = useCallback(() => {
-    const roomState = {
-      id: roomId,
-      name: roomName,
-      width,
-      length,
-      height,
-      floorColor,
-      ceilingColor,
-      wallFrontColor,
-      wallBackColor,
-      wallLeftColor,
-      wallRightColor,
-      blocks,
-      chatMessages
-    };
-    
-    try {
-      // Save current state
-      localStorage.setItem('roomState', JSON.stringify(roomState));
-      // Save backup
-      localStorage.setItem('roomStateBackup', JSON.stringify(roomState));
-    } catch (error) {
-      console.error('Error saving room state to localStorage:', error);
-    }
-  }, [roomId, roomName, width, length, height, floorColor, ceilingColor, wallFrontColor, wallBackColor, wallLeftColor, wallRightColor, blocks, chatMessages]);
+  // Auto-scroll to bottom when AI tab is clicked or new messages are added
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+  };
 
-  // Auto-save room state whenever important state changes
   useEffect(() => {
-    if (isLoaded) { // Only save after initial load
-      saveRoomStateToStorage();
-    }
-  }, [width, length, height, floorColor, ceilingColor, wallFrontColor, wallBackColor, wallLeftColor, wallRightColor, blocks, chatMessages, saveRoomStateToStorage, isLoaded]);
+    scrollToBottom();
+  }, [chatMessages]);
 
-  // Periodic save every 30 seconds as additional safety
-  useEffect(() => {
-    if (!isLoaded) return;
-    
-    const interval = setInterval(() => {
-      saveRoomStateToStorage();
-    }, 30000); // Save every 30 seconds
-    
-    return () => clearInterval(interval);
-  }, [isLoaded, saveRoomStateToStorage]);
+
 
   // AGENTIC SPECIALIZATION SYSTEM
   const [activeAgents, setActiveAgents] = useState<string[]>([]);
@@ -1011,6 +1159,15 @@ When responding:
 4. Consider lighting and how it affects colors/materials
 5. Balance current trends with timeless design principles
 
+AMAZON PRODUCT INTEGRATION:
+When Amazon product data is provided in the user's message, you should:
+- Analyze the products and provide personalized recommendations
+- Consider the user's room context, style preferences, and budget
+- Explain why specific products would work well for their needs
+- Reference product URLs, prices, and ratings in your recommendations
+- Suggest how products would fit into their overall design vision
+- Provide styling tips and complementary items
+
 Your responses should be confident but collaborative, acknowledging when other specialists should weigh in.`
     },
     "space-planner": {
@@ -1030,12 +1187,23 @@ Your responses should be confident but collaborative, acknowledging when other s
 - Ergonomic considerations and accessibility
 - Proportion and scale relationships
 
+CRITICAL: When Amazon product data is provided in the user's message (look for "Here are some Amazon products that match your request:" section), you MUST use that data to give specific recommendations. Do NOT say you cannot browse the internet or recommend checking online retailers - the product data is provided directly to you.
+
 When responding:
 1. Always consider practical usage patterns
 2. Optimize for both aesthetics and functionality
 3. Consider clearance requirements and building codes
 4. Think about how people will move through and use the space
 5. Balance multiple functional needs
+
+AMAZON PRODUCT INTEGRATION:
+When Amazon product data is provided in the user's message, you should:
+- Analyze product dimensions and how they would fit in the user's space
+- Consider traffic flow and ergonomic placement of suggested products
+- Recommend optimal positioning based on room layout and dimensions
+- Suggest complementary furniture arrangements
+- Consider clearance requirements and accessibility for each product
+- Reference product URLs and specifications in your spatial recommendations
 
 Provide specific measurements and spatial relationships. Collaborate with other agents on style while focusing on spatial intelligence.`
     },
@@ -1062,6 +1230,16 @@ When responding:
 3. Consider real-world implementation challenges
 4. Provide cost-effective alternatives when needed
 5. Ensure safety and building compliance
+
+AMAZON PRODUCT INTEGRATION:
+When Amazon product data is provided in the user's message, you should:
+- Analyze product specifications and technical requirements
+- Consider installation requirements and compatibility with existing structures
+- Evaluate material quality and durability based on product descriptions
+- Assess cost-effectiveness and value for money
+- Check for any safety or compliance considerations
+- Provide technical insights about product features and limitations
+- Reference product URLs and technical specifications in your analysis
 
 Your role is to ground creative ideas in practical reality while supporting the overall design vision.`
     }
@@ -1209,7 +1387,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
   // Debounced function to update room in Firestore
   const updateRoomInFirestore = useCallback(
     debounce(async (roomData: any) => {
-      if (!roomId) return;
+      if (!roomId || userPermission !== 'edit') return; // Only users with edit permission can update rooms
       
       try {
         const roomRef = doc(db, "rooms", roomId);
@@ -1219,7 +1397,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
         console.error("Error saving room state to Firestore:", error);
       }
     }, 1000),
-    [roomId]
+    [roomId, userPermission]
   );
 
   // Effect to persist room state changes to Firestore
@@ -1249,57 +1427,577 @@ Your role is to ground creative ideas in practical reality while supporting the 
 
     updateRoomInFirestore(roomData);
   }, [
-    isLoaded, roomId, roomName, width, length, height,
+    isLoaded, roomId, userPermission, roomName, width, length, height,
     floorColor, ceilingColor, wallFrontColor, wallBackColor, 
     wallLeftColor, wallRightColor, blocks, chatMessages, updateRoomInFirestore
   ]);
 
+  // Shared action execution function for agentic system
+  // const applyAction = useCallback((actionObj: any) => {
+  //   if (!actionObj || typeof actionObj !== 'object') return null;
+    
+  //   const { action, target, value } = actionObj;
+  //   const colorSetters: { [key: string]: (color: string) => void } = {
+  //     floorColor: setFloorColorWithHistory,
+  //     ceilingColor: setCeilingColorWithHistory,
+  //     wallFrontColor: setWallFrontColorWithHistory,
+  //     wallBackColor: setWallBackColorWithHistory,
+  //     wallLeftColor: setWallLeftColorWithHistory,
+  //     wallRightColor: setWallRightColorWithHistory,
+  //   };
+
+  //   if (action === 'set_room_dimensions') {
+  //     const { width: w, length: l, height: h } = value || {};
+  //     if (w && l && h) {
+  //       saveStateToHistory(`AI changed room dimensions to ${w}x${l}x${h}ft`);
+  //       setWidth(w);
+  //       setLength(l);
+  //       setHeight(h);
+  //       return `Changed room dimensions to ${w}x${l}x${h}ft`;
+  //     }
+  //   }
+
+  //   if (action === 'change_color') {
+  //     if (colorSetters[target]) {
+  //       colorSetters[target](value);
+  //       const friendlyTarget = target.replace(/([A-Z])/g, ' $1').toLowerCase();
+  //       return `Changed ${friendlyTarget} to ${value}`;
+  //     } else {
+  //       const matchingBlocks = blocks.filter(block => 
+  //         block.name.toLowerCase().includes(target.toLowerCase()) || 
+  //         target.toLowerCase().includes(block.name.toLowerCase())
+  //       );
+        
+  //       if (matchingBlocks.length === 0) {
+  //         return `Could not find object "${target}"`;
+  //       }
+        
+  //       setBlocksWithHistory(prevBlocks => prevBlocks.map(block => {
+  //         if (block.name.toLowerCase().includes(target.toLowerCase()) || 
+  //             target.toLowerCase().includes(block.name.toLowerCase())) {
+  //           return { ...block, color: value };
+  //         }
+  //         return block;
+  //       }), `AI changed color of ${matchingBlocks.map(b => b.name).join(', ')} to ${value}`);
+        
+  //       return `Changed ${matchingBlocks.map(b => b.name).join(', ')} color to ${value}`;
+  //     }
+  //   }
+
+  //   if (action === 'add_object') {
+  //     const libraryItem = libraryItems.find(item => 
+  //       item.name.toLowerCase().includes(target.toLowerCase()) ||
+  //       target.toLowerCase().includes(item.name.toLowerCase())
+  //     );
+      
+  //     if (libraryItem) {
+  //       const newBlock = {
+  //         id: `block_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+  //         name: libraryItem.name,
+  //         width: libraryItem.width,
+  //         height: libraryItem.height,
+  //         depth: libraryItem.depth,
+  //         x: value?.x || 0,
+  //         y: value?.y || 0,
+  //         z: value?.z || 0,
+  //         rotationY: 0,
+  //         color: libraryItem.color,
+  //         created: new Date(),
+  //       };
+        
+  //       setBlocksWithHistory([...blocks, newBlock], `AI added ${libraryItem.name} to room`);
+  //       return `Added ${libraryItem.name}`;
+  //     } else {
+  //       return `Could not find "${target}" in library`;
+  //     }
+  //   }
+
+  //   if (action === 'remove_object') {
+  //     const matchingBlocks = blocks.filter(block => 
+  //       block.name.toLowerCase().includes(target.toLowerCase()) || 
+  //       target.toLowerCase().includes(block.name.toLowerCase())
+  //     );
+      
+  //     if (matchingBlocks.length === 0) {
+  //       return `Could not find object "${target}" to remove`;
+  //     }
+      
+  //     const idsToRemove = matchingBlocks.map(block => block.id);
+  //     setBlocksWithHistory(
+  //       prevBlocks => prevBlocks.filter(block => !idsToRemove.includes(block.id)), 
+  //       `AI removed ${matchingBlocks.map(b => b.name).join(', ')}`
+  //     );
+      
+  //     return `Removed ${matchingBlocks.map(b => b.name).join(', ')}`;
+  //   }
+    
+  //   return null;
+  // }, [blocks, libraryItems, saveStateToHistory, setBlocksWithHistory, setWidth, setLength, setHeight, setFloorColorWithHistory, setCeilingColorWithHistory, setWallFrontColorWithHistory, setWallBackColorWithHistory, setWallLeftColorWithHistory, setWallRightColorWithHistory]);
+
   const handleChatSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!chatInput.trim() || isLoading) return;
-
-    // AGENTIC INTELLIGENCE: Analyze user intent and select appropriate agent
+  
     const userMessage = chatInput.trim();
-    const detectedIntents = analyzeUserIntent(userMessage);
-    const primaryAgent = selectPrimaryAgent(detectedIntents, agentContext);
-    const agent = agentSystem[primaryAgent];
-
-    console.log("🤖 Agent Selection:", {
-      message: userMessage,
-      detectedIntents,
-      primaryAgent,
-      agent: agent.name
-    });
-
-    const newMessages: Array<{ role: 'user' | 'assistant'; content: string; agent?: string; confidence?: number; reasoning?: string }> = [
+    const newMessages: Array<{ role: 'user' | 'assistant'; content: string; agent?: string; confidence?: number; reasoning?: string; amazonResults?: any; showAllProducts?: boolean }> = [
       ...chatMessages,
       { role: 'user', content: userMessage },
     ];
     setChatMessages(newMessages);
     setChatInput('');
     setIsLoading(true);
+    
+    // MULTI-AGENT SYSTEM
+    if (multiAgentMode) {
+      // Prefer live streaming from backend for ReAct traces and incremental actions
+      const USE_STREAMING_MULTI_AGENT = true;
+      if (USE_STREAMING_MULTI_AGENT) {
+        try {
+          const multiAgentRequest = {
+            user_input: userMessage,
+            room_state: {
+              width,
+              length,
+              height,
+              floorColor,
+              ceilingColor,
+              wallFrontColor,
+              wallBackColor,
+              wallLeftColor,
+              wallRightColor,
+              blocks: blocks.map((b: any) => ({
+                name: b.name,
+                width: b.width,
+                height: b.height,
+                depth: b.depth,
+                x: b.x,
+                y: b.y,
+                z: b.z,
+                color: b.color,
+              })),
+            },
+            conversation_history: [],
+            user_preferences: { style: 'modern', room_purpose: 'living room' },
+          };
 
-    // Update active agents and context
-    setActiveAgents(prev => {
-      const updated = [...new Set([...prev, primaryAgent])];
-      return updated.slice(-3); // Keep only last 3 active agents
-    });
+          const response = await fetch('http://127.0.0.1:8001/multi-agent-design-stream', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(multiAgentRequest),
+          });
 
-    setAgentContext(prev => ({
-      ...prev,
-      currentFocus: detectedIntents[0],
-      designHistory: [
-        ...(prev.designHistory || []),
-        {
-          action: `User query: ${userMessage.substring(0, 50)}...`,
-          agent: primaryAgent,
-          timestamp: Date.now(),
-          confidence: 0.8
+          if (!response.ok || !response.body) {
+            throw new Error(`Multi-agent stream error: ${response.status}`);
+          }
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+
+          // Initialize progress data structure
+          let progressData = {
+            orchestratorPlan: '',
+            orchestratorStatus: 'pending' as 'pending' | 'running' | 'completed',
+            routingInfo: null as any,
+            agents: [] as any[],
+            finalMessage: '',
+            isComplete: false
+          };
+
+          // Create initial progress message
+          const progressMessageIndex = newMessages.length;
+          setChatMessages(prev => [...prev, {
+            role: 'assistant' as const,
+            content: 'multi-agent-progress',
+            progressData: { ...progressData }
+          }]);
+
+          const updateProgress = (updatedData: any) => {
+            setChatMessages(prev => prev.map((msg, idx) => 
+              idx === progressMessageIndex 
+                ? { ...msg, progressData: { ...updatedData } }
+                : msg
+            ));
+          };
+
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+            for (const line of lines) {
+              if (!line.trim()) continue;
+              let evt: any;
+              try { evt = JSON.parse(line); } catch { continue; }
+
+              switch (evt.type) {
+                case 'orchestrator_plan': {
+                  progressData.orchestratorPlan = evt.content || '';
+                  progressData.orchestratorStatus = 'completed';
+                  updateProgress(progressData);
+                  break;
+                }
+                case 'routing': {
+                  progressData.routingInfo = {
+                    agents_needed: evt.agents_needed || [],
+                    reasoning: evt.reasoning || '',
+                    complexity: evt.complexity || 'simple'
+                  };
+                  updateProgress(progressData);
+                  break;
+                }
+                case 'agent_start': {
+                  const agentName = evt.agent || '';
+                  let agent = progressData.agents.find(a => a.name === agentName);
+                  if (!agent) {
+                    agent = { name: agentName, status: 'running', events: [] };
+                    progressData.agents.push(agent);
+                  } else {
+                    agent.status = 'running';
+                  }
+                  updateProgress(progressData);
+                  break;
+                }
+                case 'thought': {
+                  const agentName = evt.agent || '';
+                  let agent = progressData.agents.find(a => a.name === agentName);
+                  if (!agent) {
+                    agent = { name: agentName, status: 'running', events: [] };
+                    progressData.agents.push(agent);
+                  }
+                  agent.events.push({
+                    type: 'thought',
+                    agent: agentName,
+                    content: evt.content || ''
+                  });
+                  updateProgress(progressData);
+                  break;
+                }
+                case 'action': {
+                  const agentName = evt.agent || '';
+                  let agent = progressData.agents.find(a => a.name === agentName);
+                  if (!agent) {
+                    agent = { name: agentName, status: 'running', events: [] };
+                    progressData.agents.push(agent);
+                  }
+                  agent.events.push({
+                    type: 'action',
+                    agent: agentName,
+                    tool: evt.tool || '',
+                    args: evt.args || {}
+                  });
+                  updateProgress(progressData);
+                  break;
+                }
+                case 'actions': {
+                  const actions = evt.actions || [];
+                  for (const action of actions) {
+                    if (action.action === 'change_color') {
+                      if (action.target === 'wallFrontColor') setWallFrontColor(action.value);
+                      else if (action.target === 'wallBackColor') setWallBackColor(action.value);
+                      else if (action.target === 'wallLeftColor') setWallLeftColor(action.value);
+                      else if (action.target === 'wallRightColor') setWallRightColor(action.value);
+                      else if (action.target === 'floorColor') setFloorColor(action.value);
+                      else if (action.target === 'ceilingColor') setCeilingColor(action.value);
+                    } else if (action.action === 'add_object') {
+                      const newBlock = {
+                        id: `block-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                        name: action.target,
+                        x: action.value.x || 0,
+                        y: action.value.y || 0,
+                        z: action.value.z || 0,
+                        width: action.value.width || 1,
+                        height: action.value.height || 1,
+                        depth: action.value.depth || 1,
+                        color: action.value.color || '#888888',
+                        rotation: action.value.rotation || 0,
+                        created: new Date()
+                      } as any;
+                      setBlocksWithHistory(prev => [...prev, newBlock], `AI added ${action.target}`);
+                    } else if (action.action === 'move_object') {
+                      setBlocksWithHistory(prevBlocks => prevBlocks.map(block => {
+                        if (block.name.toLowerCase().includes(action.target.toLowerCase()) || action.target.toLowerCase().includes(block.name.toLowerCase())) {
+                          return { ...block, x: action.value.x, y: action.value.y, z: action.value.z };
+                        }
+                        return block;
+                      }), `AI moved ${action.target}`);
+                    } else if (action.action === 'remove_object') {
+                      setBlocksWithHistory(prevBlocks => {
+                        const idsToRemove = prevBlocks
+                          .filter((b: any) => b.name.toLowerCase().includes(action.target.toLowerCase()) || action.target.toLowerCase().includes(b.name.toLowerCase()))
+                          .map((b: any) => b.id);
+                        return prevBlocks.filter((b: any) => !idsToRemove.includes(b.id));
+                      }, `AI removed ${action.target}`);
+                    }
+                  }
+                  break;
+                }
+                case 'agent_complete': {
+                  const agentName = evt.agent || '';
+                  const agent = progressData.agents.find(a => a.name === agentName);
+                  if (agent) {
+                    agent.status = 'completed';
+                    agent.actions = evt.actions || [];
+                  }
+                  updateProgress(progressData);
+                  break;
+                }
+                case 'final': {
+                  progressData.finalMessage = evt.message || 'Multi-agent analysis complete.';
+                  progressData.isComplete = true;
+                  updateProgress(progressData);
+                  break;
+                }
+                case 'clarification_needed': {
+                  // Show clarification questions to user
+                  const clarificationMessage = {
+                    role: 'assistant' as const,
+                    content: evt.message || 'I need clarification to proceed.',
+                    clarificationNeeded: true,
+                    clarificationType: evt.clarification_type,
+                    questions: evt.questions || []
+                  };
+                  setChatMessages(prev => [...prev, clarificationMessage]);
+                  setIsLoading(false);
+                  return; // Stop processing until user responds
+                }
+              }
+            }
+          }
+
+          setIsLoading(false);
+          return;
+        } catch (error) {
+          console.error('Multi-agent stream error:', error);
+          setChatMessages(prev => [...prev, { role: 'assistant', content: 'Error running multi-agent workflow.' }]);
+          setIsLoading(false);
+          return;
         }
-      ].slice(-10) // Keep only last 10 history items
-    }));
+      }
+      try {
+        const response = await fetch('/api/multi-agent-chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt: userMessage,
+            roomState: {
+              width,
+              length,
+              height,
+              floorColor,
+              ceilingColor,
+              wallFrontColor,
+              wallBackColor,
+              wallLeftColor,
+              wallRightColor,
+              blocks
+            },
+            messages: chatMessages,
+            multiAgentMode: true,
+            userPreferences: {
+              style: 'modern',
+              room_purpose: 'living room'
+            }
+          }),
+        });
 
+        if (!response.ok) {
+          throw new Error(`Multi-agent API error: ${response.status}`);
+        }
+
+        const data = await response.json();
+        
+        // Handle questions from the multi-agent system
+        if (data.type === 'questions') {
+          const assistantMessage = {
+            role: 'assistant' as const,
+            content: `${data.message}\n\n**Questions:**\n${data.questions.map((q: string, i: number) => `${i + 1}. ${q}`).join('\n')}\n\n*Please answer these questions so I can create the perfect room for you.*`
+          };
+          setChatMessages([...newMessages, assistantMessage]);
+          setIsLoading(false);
+          return;
+        }
+
+        // Handle multi-agent actions
+        if (data.type === 'multi_agent_actions' && data.actions) {
+          // Apply all room actions
+          for (const action of data.actions) {
+            // Apply action directly to room state
+            if (action.action === 'change_color') {
+              if (action.target === 'wallFrontColor') setWallFrontColor(action.value);
+              else if (action.target === 'wallBackColor') setWallBackColor(action.value);
+              else if (action.target === 'wallLeftColor') setWallLeftColor(action.value);
+              else if (action.target === 'wallRightColor') setWallRightColor(action.value);
+              else if (action.target === 'floorColor') setFloorColor(action.value);
+              else if (action.target === 'ceilingColor') setCeilingColor(action.value);
+            } else if (action.action === 'add_object') {
+              const newBlock = {
+                id: `block-${Date.now()}`,
+                name: action.target,
+                x: action.value.x || 0,
+                y: action.value.y || 0,
+                z: action.value.z || 0,
+                width: action.value.width || 1,
+                height: action.value.height || 1,
+                depth: action.value.depth || 1,
+                color: action.value.color || '#888888',
+                rotation: action.value.rotation || 0,
+                created: new Date()
+              };
+              setBlocksWithHistory(prev => [...prev, newBlock], `AI added ${action.target}`);
+            } else if (action.action === 'move_object') {
+              setBlocksWithHistory(prevBlocks => prevBlocks.map(block => {
+                if (block.name.toLowerCase().includes(action.target.toLowerCase()) || action.target.toLowerCase().includes(block.name.toLowerCase())) {
+                  return { ...block, x: action.value.x, y: action.value.y, z: action.value.z };
+                }
+                return block;
+              }), `AI moved ${action.target}`);
+            }
+          }
+
+          // Create summary message
+          const summaryMessage = `${data.message}\n\n🤖 **Multi-Agent Analysis Summary:**\n• **Agents Used:** ${data.agents_used.join(', ')}\n• **Total Actions:** ${data.actions.length}\n• **Complexity:** ${data.summary.complexity}\n\n**Actions Performed:**\n${data.actions.map((action: any, i: number) => `${i + 1}. ${action.action}: ${action.target} → ${JSON.stringify(action.value)}`).join('\n')}`;
+          
+          const assistantMessage = {
+            role: 'assistant' as const,
+            content: summaryMessage
+          };
+          setChatMessages([...newMessages, assistantMessage]);
+          setIsLoading(false);
+          return;
+        }
+
+        // Handle text response
+        if (data.type === 'text_response') {
+          const assistantMessage = {
+            role: 'assistant' as const,
+            content: data.message || 'Multi-agent analysis complete.'
+          };
+          setChatMessages([...newMessages, assistantMessage]);
+          setIsLoading(false);
+          return;
+        }
+
+        // Handle any other response type
+        const assistantMessage = {
+          role: 'assistant' as const,
+          content: data.message || 'Multi-agent analysis complete.'
+        };
+        setChatMessages([...newMessages, assistantMessage]);
+        setIsLoading(false);
+        return;
+
+      } catch (error) {
+        console.error('Multi-agent system error:', error);
+        const errorMessage = {
+          role: 'assistant' as const,
+          content: 'Sorry, the multi-agent system encountered an error. Please try again.'
+        };
+        setChatMessages([...newMessages, errorMessage]);
+        setIsLoading(false);
+        return;
+      }
+    }
+    
+    // AMAZON KNOWLEDGE BASE AGENT
+    if (amazonKnowledgeBaseEnabled) {
+      try {
+        const results = await searchAmazonProducts(userMessage);
+  
+        if (results && results.products && results.products.length > 0) {
+          const productContext = results.products.map((product: any) => 
+            `Product: ${product.title}
+  Price: ${product.price.current_price}
+  Rating: ${product.rating}/5 (${product.ratings_total} reviews)
+  Prime: ${product.prime ? 'Yes' : 'No'}
+  URL: ${product.link}`
+          ).join('\n\n');
+  
+          const amazonSystemPrompt = `You are an Amazon shopping assistant. A user has searched for products and you have been provided with a list of results. Your task is to summarize the findings in a helpful and natural way.
+  - Do not act as an interior designer.
+  - Do not make recommendations about style or placement.
+  - Simply summarize the products that were found.
+  - Mention the number of products found.
+  - You can highlight 1-3 products that seem like a good match based on the user's query.
+  - Keep your response concise and easy to read.
+  - Do not include the product URLs in your response, the user can see them in the full results.`;
+  
+          const enhancedUserMessage = `User query: "${userMessage}"
+  
+  Here are the Amazon products that were found:
+  
+  ${productContext}`;
+  
+          const response = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              prompt: enhancedUserMessage,
+              agentSystem: {
+                systemPrompt: amazonSystemPrompt,
+                selectedAgent: 'amazon-knowledge-base',
+                agentName: 'Amazon Shopping Assistant',
+                agentEmoji: '🛒',
+                specialties: ['product search', 'shopping recommendations', 'price comparison'],
+                confidence: {
+                  'product search': 0.95,
+                  'shopping recommendations': 0.90,
+                  'price comparison': 0.85
+                },
+              },
+              roomState: {}, // Not needed for this agent
+              messages: [], // History not needed for this agent
+            }),
+          });
+  
+          const text = await response.text();
+          setChatMessages([
+            ...newMessages,
+            { 
+              role: 'assistant', 
+              content: text, 
+              agent: 'amazon-knowledge-base',
+              amazonResults: results,
+              showAllProducts: false // Initial state for the toggle
+            },
+          ]);
+  
+        } else {
+          setChatMessages([
+            ...newMessages,
+            { 
+              role: 'assistant', 
+              content: "I couldn't find any products matching your search.", 
+              agent: 'amazon-knowledge-base',
+              amazonResults: null,
+              showAllProducts: false
+            },
+          ]);
+        }
+      } catch (error) {
+        console.error('Amazon search failed:', error);
+        setChatMessages([
+          ...newMessages,
+          { 
+            role: 'assistant', 
+            content: 'Sorry, I encountered an error while searching for products.',
+            amazonResults: null,
+            showAllProducts: false
+          },
+        ]);
+      } finally {
+        setIsLoading(false);
+      }
+      return; // Stop execution to prevent other agents from running
+    }
+  
+    // SIMPLE 3-AGENT SYSTEM
     try {
+      // Analyze user intent to select the appropriate agent
+      const intents = analyzeUserIntent(userMessage);
+      const primaryAgent = selectPrimaryAgent(intents, agentContext);
+      
       // Prepare enhanced context for the specialized agent
       const agentResponse = await fetch('/api/chat', {
         method: 'POST',
@@ -1309,14 +2007,12 @@ Your role is to ground creative ideas in practical reality while supporting the 
         body: JSON.stringify({
           prompt: userMessage,
           agentSystem: {
+            systemPrompt: agentSystem[primaryAgent].systemPrompt,
             selectedAgent: primaryAgent,
-            agentName: agent.name,
-            agentEmoji: agent.emoji,
-            systemPrompt: agent.systemPrompt,
-            specialties: agent.specialties,
-            confidence: agent.confidence,
-            context: agentContext,
-            activeAgents: activeAgents
+            agentName: agentSystem[primaryAgent].name,
+            agentEmoji: agentSystem[primaryAgent].emoji,
+            specialties: agentSystem[primaryAgent].specialties,
+            confidence: agentSystem[primaryAgent].confidence,
           },
           roomState: {
             width,
@@ -1330,16 +2026,17 @@ Your role is to ground creative ideas in practical reality while supporting the 
             wallRightColor,
             blocks,
           },
-          messages: newMessages.slice(0, -1).map(msg => ({
+          messages: newMessages.slice(0, -1).map((msg: any) => ({
             role: msg.role,
             content: msg.content,
             agent: msg.agent
           })),
         }),
       });
-
+  
       const text = await agentResponse.text();
-
+  
+      // Define applyAction function inside handleChatSubmit
       const applyAction = (actionObj: any) => {
         const { action, target, value } = actionObj;
         const colorSetters: { [key: string]: (color: string) => void } = {
@@ -1350,7 +2047,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
           wallLeftColor: setWallLeftColorWithHistory,
           wallRightColor: setWallRightColorWithHistory,
         };
-
+  
         if (action === 'set_room_dimensions') {
           const { width, length, height } = value;
           saveStateToHistory(`AI changed room dimensions to ${width}x${length}x${height}ft`);
@@ -1359,7 +2056,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
           setHeight(height);
           return `I've set the room dimensions to ${width}ft x ${length}ft x ${height}ft.`;
         }
-
+  
         if (action === 'change_color') {
           if (colorSetters[target]) {
             colorSetters[target](value);
@@ -1379,7 +2076,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
             return found ? `I've updated the color for object(s) matching "${target}" to ${value}.` : `I couldn't find any object named "${target}".`;
           }
         }
-
+  
         if (action === 'move_object') {
           let found = false;
           const foundObjects: string[] = [];
@@ -1393,7 +2090,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
           }), `AI moved ${foundObjects.join(', ')} to new position`);
           return found ? `I've moved the object(s) matching "${target}" to the new coordinates.` : `I couldn't find any object named "${target}" to move.`;
         }
-
+  
         if (action === 'add_object') {
           const libraryItem = libraryItems.find(item => item.name.toLowerCase() === target.toLowerCase());
           if (libraryItem) {
@@ -1407,6 +2104,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
               height: libraryItem.height,
               depth: libraryItem.depth,
               color: libraryItem.color,
+              rotation: 0,
               created: new Date(),
             };
             setBlocksWithHistory(prev => [...prev, newBlock], `AI added ${target} to room`);
@@ -1415,7 +2113,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
             return `I couldn't find a "${target}" in the library.`;
           }
         }
-
+  
         if (action === 'remove_object') {
           let found = false;
           const removedObjects: string[] = [];
@@ -1431,107 +2129,53 @@ Your role is to ground creative ideas in practical reality while supporting the 
         }
         return '';
       };
+  
+          // Try to parse the response as JSON to check for actions
+    let actionExecuted = false;
+    let responseMessage = text;
 
-      // Enhanced JSON extraction and action parsing
-      let actionsApplied = false;
-      let summaryMsgs: string[] = [];
-
-      // First, try to extract JSON from the response
-      const extractJSON = (responseText: string) => {
-        // Try direct JSON parsing first
-        try {
-          return JSON.parse(responseText);
-        } catch {
-          // Try to extract JSON from code blocks or mixed text
-          const jsonMatches = responseText.match(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g) || 
-                             responseText.match(/\[[^\[\]]*(?:\[[^\[\]]*\][^\[\]]*)*\]/g);
-          
-          if (jsonMatches) {
-            for (const match of jsonMatches) {
-              try {
-                return JSON.parse(match);
-              } catch {
-                continue;
-              }
-            }
-          }
-          
-          // Try to extract multiple JSON objects separated by commas
-          const multiJsonMatch = responseText.match(/\{.*?\}(?:\s*,\s*\{.*?\})*/g);
-          if (multiJsonMatch) {
-            try {
-              return JSON.parse(`[${multiJsonMatch.join(',')}]`);
-            } catch {
-              // If that fails, try individual objects
-              const objects = [];
-              for (const jsonStr of multiJsonMatch) {
-                try {
-                  objects.push(JSON.parse(jsonStr.trim()));
-                } catch {
-                  continue;
-                }
-              }
-              if (objects.length > 0) {
-                return objects.length === 1 ? objects[0] : objects;
-              }
-            }
-          }
-          
-          return null;
-        }
-      };
-
-      const extractedData = extractJSON(text);
+    try {
+      const data = JSON.parse(text);
       
-      if (extractedData) {
-        try {
-          if (Array.isArray(extractedData)) {
-            // Handle array of actions
-            extractedData.forEach((actionObj: any) => {
-              if (actionObj && typeof actionObj === 'object' && actionObj.action) {
-                summaryMsgs.push(applyAction(actionObj));
-                actionsApplied = true;
-              }
-            });
-          } else if (typeof extractedData === 'object' && extractedData !== null && extractedData.action) {
-            // Handle single action
-            summaryMsgs.push(applyAction(extractedData));
-            actionsApplied = true;
+      if (Array.isArray(data)) {
+        // Handle array of actions
+        const results = [];
+        for (const actionObj of data) {
+          if (actionObj && actionObj.action) {
+            const result = applyAction(actionObj);
+            if (result) results.push(result);
           }
-        } catch (e) {
-          console.error('Error applying actions:', e);
+        }
+        if (results.length > 0) {
+          responseMessage = results.join(' ');
+          actionExecuted = true;
+        }
+      } else if (data.action) {
+        // Handle single action
+        const result = applyAction(data);
+        if (result) {
+          responseMessage = result;
+          actionExecuted = true;
         }
       }
-
-      if (actionsApplied && summaryMsgs.length > 0) {
-        const assistantMessage = summaryMsgs.join(' ');
-        setChatMessages([
-          ...newMessages,
-          { 
-            role: 'assistant', 
-            content: assistantMessage,
-            agent: primaryAgent,
-            confidence: 0.85,
-            reasoning: `Applied ${summaryMsgs.length} design action(s)`
-          },
-        ]);
-        // Learn from this interaction
-        updateContextFromInteraction(userMessage, assistantMessage, primaryAgent);
-      } else {
-        // No actions found, treat as text response
-        setChatMessages([
-          ...newMessages,
-          { 
-            role: 'assistant', 
-            content: text,
-            agent: primaryAgent,
-            confidence: 0.75,
-            reasoning: "General design advice"
-          },
-        ]);
-        // Learn from this interaction
-        updateContextFromInteraction(userMessage, text, primaryAgent);
-      }
+    } catch (e) {
+      // Not JSON, treat as regular text response
+      responseMessage = text;
+    }
+  
+      setChatMessages([
+        ...newMessages,
+        {
+          role: 'assistant',
+          content: responseMessage,
+          agent: primaryAgent,
+          confidence: 0.8,
+        },
+      ]);
+  
+      // Update context from this interaction
+      updateContextFromInteraction(userMessage, responseMessage, primaryAgent);
+  
     } catch (error) {
       console.error('Error fetching from chat API:', error);
       setChatMessages([
@@ -1593,6 +2237,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
       height: item.height,
       depth: item.depth,
       color: item.color,
+      rotation: 0,
       created: new Date()
     };
     setBlocksWithHistory(prev => [...prev, newBlock], `Added ${item.name} from library`);
@@ -1604,34 +2249,40 @@ Your role is to ground creative ideas in practical reality while supporting the 
       return;
     }
 
-    const sanitizedBlocks = blocks.map(block => {
-      const { created, ...rest } = block;
-      return rest;
-    });
+    // Only users with edit permission can save changes to Firebase
+    if (userPermission === 'edit') {
+      const sanitizedBlocks = blocks.map(block => {
+        const { created, ...rest } = block;
+        return rest;
+      });
 
-    const roomData = {
-      name: roomName,
-      width,
-      length,
-      height,
-      floorColor,
-      ceilingColor,
-      wallFrontColor,
-      wallBackColor,
-      wallLeftColor,
-      wallRightColor,
-      blocks: sanitizedBlocks,
-    };
+      const roomData = {
+        name: roomName,
+        width,
+        length,
+        height,
+        floorColor,
+        ceilingColor,
+        wallFrontColor,
+        wallBackColor,
+        wallLeftColor,
+        wallRightColor,
+        blocks: sanitizedBlocks,
+        sharedWith: sharedWith,
+        sharedWithEmails: sharedWith.map(user => user.email), // Keep for backward compatibility
+        editorEmails: sharedWith.filter(user => user.permission === 'edit').map(user => user.email), // Separate array for editors
+      };
 
-    try {
-      const roomRef = doc(db, 'rooms', roomId);
-      await updateDoc(roomRef, roomData);
-    } catch (error) {
-      console.error("Error saving room:", error);
-      // Optionally, show an error message to the user
-    } finally {
-      router.push('/layout');
+      try {
+        const roomRef = doc(db, 'rooms', roomId);
+        await updateDoc(roomRef, roomData);
+      } catch (error) {
+        console.error("Error saving room:", error);
+        // Optionally, show an error message to the user
+      }
     }
+    
+    router.push('/layout');
   };
 
   // Add state for sidebar tab
@@ -1644,6 +2295,220 @@ Your role is to ground creative ideas in practical reality while supporting the 
       chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight;
     }
   }, [chatMessages]);
+
+  // Share modal state
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [sharedWith, setSharedWith] = useState<ShareUser[]>([]);
+  const [linkSharing, setLinkSharing] = useState<LinkSharing>({
+    enabled: false,
+    permission: "view",
+    link: typeof window !== 'undefined' ? window.location.href : ""
+  });
+  
+  // Amazon Knowledge Base state
+  const [amazonKnowledgeBaseEnabled, setAmazonKnowledgeBaseEnabled] = useState(false);
+  const [isSearchingProducts, setIsSearchingProducts] = useState(false);
+
+  
+  const { user } = useAuth();
+  const owner = { email: user?.email || "you@example.com", name: "You" };
+
+  // Message Content Renderer
+  const renderMessageContent = (content: string) => {
+    // Split content into lines
+    const lines = content.split('\n');
+    
+    return lines.map((line, index) => {
+      // Handle numbered lists (1. 2. 3. etc.)
+      const numberedListMatch = line.match(/^(\d+)\.\s+(.+)$/);
+      if (numberedListMatch) {
+        const [, number, text] = numberedListMatch;
+        return (
+          <div key={index} style={{ marginBottom: '8px', display: 'flex', gap: '8px' }}>
+            <span style={{ 
+              fontWeight: 'bold', 
+              color: '#4f46e5',
+              minWidth: '20px'
+            }}>
+              {number}.
+            </span>
+            <span>{renderFormattedText(text)}</span>
+          </div>
+        );
+      }
+      
+      // Handle bullet points
+      if (line.trim().startsWith('•')) {
+        return (
+          <div key={index} style={{ marginBottom: '8px', display: 'flex', gap: '8px' }}>
+            <span style={{ color: '#4f46e5' }}>•</span>
+            <span>{renderFormattedText(line.substring(1).trim())}</span>
+          </div>
+        );
+      }
+      
+      // Handle bold text (remove ** and make it bold)
+      if (line.includes('**')) {
+        return (
+          <div key={index} style={{ marginBottom: '8px' }}>
+            {renderFormattedText(line)}
+          </div>
+        );
+      }
+      
+      // Regular text
+      return (
+        <div key={index} style={{ marginBottom: '8px' }}>
+          {renderFormattedText(line)}
+        </div>
+      );
+    });
+  };
+
+  // Helper function to render formatted text with links
+  const renderFormattedText = (text: string) => {
+    // Handle URLs - make them clickable
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    const parts = text.split(urlRegex);
+    
+    return parts.map((part, index) => {
+      if (urlRegex.test(part)) {
+        return (
+          <a
+            key={index}
+            href={part}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              color: '#3b82f6',
+              textDecoration: 'underline',
+              wordBreak: 'break-all'
+            }}
+          >
+            {part}
+          </a>
+        );
+      }
+      
+      // Handle bold text (remove ** and make it bold)
+      if (part.includes('**')) {
+        const boldParts = part.split(/(\*\*[^*]+\*\*)/g);
+        return boldParts.map((boldPart, boldIndex) => {
+          if (boldPart.startsWith('**') && boldPart.endsWith('**')) {
+            return (
+              <strong key={boldIndex} style={{ fontWeight: '600' }}>
+                {boldPart.slice(2, -2)}
+              </strong>
+            );
+          }
+          return boldPart;
+        });
+      }
+      
+      return part;
+    });
+  };
+
+  // Amazon Product Search Function
+  const searchAmazonProducts = async (query: string) => {
+    if (!amazonKnowledgeBaseEnabled) return null;
+    
+    setIsSearchingProducts(true);
+    try {
+      // For now, we'll use a simple approach - you'll need to add your Rainforest API key
+      const response = await fetch('/api/amazon-search', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ query }),
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        return data;
+      } else {
+        console.error('Failed to search Amazon products');
+        return null;
+      }
+    } catch (error) {
+      console.error('Error searching Amazon products:', error);
+      return null;
+    } finally {
+      setIsSearchingProducts(false);
+    }
+  };
+
+  // Function to save room state to localStorage
+  const saveRoomStateToStorage = useCallback(() => {
+    const roomState = {
+      id: roomId,
+      name: roomName,
+      width,
+      length,
+      height,
+      floorColor,
+      ceilingColor,
+      wallFrontColor,
+      wallBackColor,
+      wallLeftColor,
+      wallRightColor,
+      blocks,
+      chatMessages,
+      sharedWith
+    };
+    
+    try {
+      // Save current state
+      localStorage.setItem('roomState', JSON.stringify(roomState));
+      // Save backup
+      localStorage.setItem('roomStateBackup', JSON.stringify(roomState));
+    } catch (error) {
+      console.error('Error saving room state to localStorage:', error);
+    }
+  }, [roomId, roomName, width, length, height, floorColor, ceilingColor, wallFrontColor, wallBackColor, wallLeftColor, wallRightColor, blocks, chatMessages, sharedWith]);
+
+  // Update owner status when user loads
+  useEffect(() => {
+    if (user && roomId) {
+      const roomStateJSON = localStorage.getItem('roomState');
+      if (roomStateJSON) {
+        try {
+          const roomState = JSON.parse(roomStateJSON);
+          const isOwner = roomState.userId === user.uid || !roomState.userId;
+          setIsOwner(isOwner);
+          setUserPermission(isOwner ? 'edit' : (roomState.permission || 'view'));
+        } catch (error) {
+          console.error('Error updating owner status:', error);
+        }
+      }
+    }
+  }, [user, roomId]);
+
+  // Refresh shared users when share modal opens
+  useEffect(() => {
+    if (shareModalOpen && roomId) {
+      loadSharedUsers(roomId);
+    }
+  }, [shareModalOpen, roomId]);
+
+  // Auto-save room state whenever important state changes
+  useEffect(() => {
+    if (isLoaded) { // Only save after initial load
+      saveRoomStateToStorage();
+    }
+  }, [width, length, height, floorColor, ceilingColor, wallFrontColor, wallBackColor, wallLeftColor, wallRightColor, blocks, chatMessages, sharedWith, saveRoomStateToStorage, isLoaded]);
+
+  // Periodic save every 30 seconds as additional safety
+  useEffect(() => {
+    if (!isLoaded) return;
+    
+    const interval = setInterval(() => {
+      saveRoomStateToStorage();
+    }, 30000); // Save every 30 seconds
+    
+    return () => clearInterval(interval);
+  }, [isLoaded, saveRoomStateToStorage]);
 
   if (!isLoaded) {
     return <div>Loading...</div>; // Or a spinner
@@ -1722,39 +2587,51 @@ Your role is to ground creative ideas in practical reality while supporting the 
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 18, fontWeight: 600, color: '#222', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{roomName}</span>
-            <button onClick={() => setIsEditingName(true)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', padding: 4, borderRadius: 6 }} title="Edit Room Name">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
-            </button>
+            {isOwner && (
+              <button onClick={() => setIsEditingName(true)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6b7280', padding: 4, borderRadius: 6 }} title="Edit Room Name">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 1 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+              </button>
+            )}
           </div>
         )}
-        {/* Share Button */}
-        <button
-          onClick={() => {
-            if (navigator.share) {
-              navigator.share({ title: roomName, url: window.location.href });
-            } else {
-              navigator.clipboard.writeText(window.location.href);
-              alert('Room link copied to clipboard!');
-            }
-          }}
-          style={{
-            background: '#fff',
-            border: '1px solid #e5e7eb',
-            borderRadius: '50%',
-            width: 40,
-            height: 40,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.04)',
-            cursor: 'pointer',
-            marginLeft: 4,
-            transition: 'background 0.2s',
-          }}
-          title="Share Room"
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#222" strokeWidth="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.59 13.51l6.83 3.98"/><path d="M15.41 6.51l-6.82 3.98"/></svg>
-        </button>
+        {/* Permission Indicator */}
+        {!isOwner && (
+          <div style={{
+            background: '#e5e7eb',
+            color: '#6b7280',
+            padding: '6px 12px',
+            borderRadius: 20,
+            fontSize: 12,
+            fontWeight: 600,
+            marginLeft: 8
+          }}>
+            {userPermission === 'edit' ? 'Editor' : 'Viewer'}
+          </div>
+        )}
+        
+        {/* Share Button - Only for owners */}
+        {isOwner && (
+          <button
+            onClick={() => setShareModalOpen(true)}
+            style={{
+              background: '#fff',
+              border: '1px solid #e5e7eb',
+              borderRadius: '50%',
+              width: 40,
+              height: 40,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.04)',
+              cursor: 'pointer',
+              marginLeft: 4,
+              transition: 'background 0.2s',
+            }}
+            title="Share Room"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#222" strokeWidth="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.59 13.51l6.83 3.98"/><path d="M15.41 6.51l-6.82 3.98"/></svg>
+          </button>
+        )}
       </div>
 
       {/* 3D Canvas (centered in area left of sidebar) */}
@@ -1784,7 +2661,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
               shadows
             >
               {/* Enhanced Lighting Setup for Inside View */}
-              <ambientLight intensity={0.4} color="#f5f5f5" />
+              <ambientLight intensity={1.2} color="#ffffff" />
               <directionalLight 
                 position={[10, 20, 10]} 
                 intensity={1.2} 
@@ -1856,7 +2733,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
               gl={{ logarithmicDepthBuffer: true }}
             >
               {/* Enhanced Lighting Setup for Outside View */}
-              <ambientLight intensity={0.4} color="#f5f5f5" />
+              <ambientLight intensity={1.2} color="#ffffff" />
               <directionalLight 
                 position={[10, 20, 10]} 
                 intensity={1.2} 
@@ -1894,8 +2771,8 @@ Your role is to ground creative ideas in practical reality while supporting the 
                 ceilingColor={ceilingColor}
                 wallFrontColor={wallFrontColor}
                 wallBackColor={wallBackColor}
-                wallLeftColor={wallRightColor}
-                wallRightColor={wallLeftColor}
+                wallLeftColor={wallLeftColor}
+                wallRightColor={wallRightColor}
                 blocks={blocks}
                 previewBlock={previewMode ? blockConfig : null}
               />
@@ -1968,7 +2845,11 @@ Your role is to ground creative ideas in practical reality while supporting the 
             Menu
           </button>
           <button
-            onClick={() => setSidebarTab('ai')}
+            onClick={() => {
+              setSidebarTab('ai');
+              // Scroll to bottom after a short delay to ensure the AI content is rendered
+              setTimeout(() => scrollToBottom(), 100);
+            }}
             style={{
               flex: 1,
               padding: '16px 0',
@@ -2532,19 +3413,21 @@ Your role is to ground creative ideas in practical reality while supporting the 
                         
                         <div style={{ marginBottom: 16 }}>
                           <button
-                            onClick={() => setRulerMode(!rulerMode)}
-                            style={{
-                              width: "100%",
-                              background: rulerMode ? "#10b981" : "#f9fafb",
-                              color: rulerMode ? "#ffffff" : "#6b7280",
-                              border: "1px solid " + (rulerMode ? "#10b981" : "#e5e7eb"),
-                              borderRadius: 8,
-                              padding: "12px 16px",
-                              fontSize: 13,
-                              fontWeight: 600,
-                              cursor: "pointer",
-                              transition: "all 0.2s ease"
-                            }}
+                            onClick={() => userPermission === 'edit' && setRulerMode(!rulerMode)}
+                            disabled={userPermission !== 'edit'}
+                                                          style={{
+                                width: "100%",
+                                background: userPermission === 'edit' ? (rulerMode ? "#10b981" : "#f9fafb") : "#f3f4f6",
+                                color: userPermission === 'edit' ? (rulerMode ? "#ffffff" : "#6b7280") : "#9ca3af",
+                                border: "1px solid " + (userPermission === 'edit' ? (rulerMode ? "#10b981" : "#e5e7eb") : "#e5e7eb"),
+                                borderRadius: 8,
+                                padding: "12px 16px",
+                                fontSize: 13,
+                                fontWeight: 600,
+                                cursor: userPermission === 'edit' ? "pointer" : "not-allowed",
+                                transition: "all 0.2s ease",
+                                opacity: userPermission === 'edit' ? 1 : 0.5
+                              }}
                           >
                             Ruler Mode {rulerMode ? 'ON' : 'OFF'}
                           </button>
@@ -2553,19 +3436,21 @@ Your role is to ground creative ideas in practical reality while supporting the 
                         {rulerMode && (
                           <div style={{ marginBottom: 16 }}>
                             <button
-                              onClick={() => setRulers([])}
-                              style={{
-                                width: "100%",
-                                background: "#fef2f2",
-                                color: "#dc2626",
-                                border: "1px solid #fecaca",
-                                borderRadius: 8,
-                                padding: "12px 16px",
-                                fontSize: 13,
-                                fontWeight: 600,
-                                cursor: "pointer",
-                                transition: "all 0.2s ease"
-                              }}
+                              onClick={() => userPermission === 'edit' && setRulers([])}
+                              disabled={userPermission !== 'edit'}
+                                                              style={{
+                                  width: "100%",
+                                  background: userPermission === 'edit' ? "#fef2f2" : "#f3f4f6",
+                                  color: userPermission === 'edit' ? "#dc2626" : "#9ca3af",
+                                  border: "1px solid #fecaca",
+                                  borderRadius: 8,
+                                  padding: "12px 16px",
+                                  fontSize: 13,
+                                  fontWeight: 600,
+                                  cursor: userPermission === 'edit' ? "pointer" : "not-allowed",
+                                  transition: "all 0.2s ease",
+                                  opacity: userPermission === 'edit' ? 1 : 0.5
+                                }}
                             >
                               Clear Rulers
                             </button>
@@ -2575,19 +3460,21 @@ Your role is to ground creative ideas in practical reality while supporting the 
                         {/* Builder Mode Toggle */}
                         <div style={{ marginBottom: 16 }}>
                           <button
-                            onClick={() => setBuilderMode(!builderMode)}
-                            style={{
-                              width: "100%",
-                              background: builderMode ? "#10b981" : "#f9fafb",
-                              color: builderMode ? "#ffffff" : "#6b7280",
-                              border: "1px solid " + (builderMode ? "#10b981" : "#e5e7eb"),
-                              borderRadius: 8,
-                              padding: "12px 16px",
-                              fontSize: 13,
-                              fontWeight: 600,
-                              cursor: "pointer",
-                              transition: "all 0.2s ease"
-                            }}
+                            onClick={() => userPermission === 'edit' && setBuilderMode(!builderMode)}
+                            disabled={userPermission !== 'edit'}
+                                                          style={{
+                                width: "100%",
+                                background: userPermission === 'edit' ? (builderMode ? "#10b981" : "#f9fafb") : "#f3f4f6",
+                                color: userPermission === 'edit' ? (builderMode ? "#ffffff" : "#6b7280") : "#9ca3af",
+                                border: "1px solid " + (userPermission === 'edit' ? (builderMode ? "#10b981" : "#e5e7eb") : "#e5e7eb"),
+                                borderRadius: 8,
+                                padding: "12px 16px",
+                                fontSize: 13,
+                                fontWeight: 600,
+                                cursor: userPermission === 'edit' ? "pointer" : "not-allowed",
+                                transition: "all 0.2s ease",
+                                opacity: userPermission === 'edit' ? 1 : 0.5
+                              }}
                           >
                             Builder Mode {builderMode ? 'ON' : 'OFF'}
                           </button>
@@ -2626,19 +3513,21 @@ Your role is to ground creative ideas in practical reality while supporting the 
                                       value={blockConfig[dim]}
                                       min={0.1}
                                       step={0.1}
-                                      onChange={e => setBlockConfig(prev => ({...prev, [dim]: Number(e.target.value)}))}
+                                      onChange={e => userPermission === 'edit' && setBlockConfig(prev => ({...prev, [dim]: Number(e.target.value)}))}
                                       onClick={(e) => e.stopPropagation()}
-                                      style={{
-                                        width: "100%",
-                                        fontSize: 13,
-                                        padding: "8px 10px",
-                                        borderRadius: 6,
-                                        border: "1px solid #d1d5db",
-                                        background: "#ffffff",
-                                        outline: "none",
-                                        transition: "all 0.2s ease",
-                                        color: "#111827"
-                                      }}
+                                      disabled={userPermission !== 'edit'}
+                                                                              style={{
+                                          width: "100%",
+                                          fontSize: 13,
+                                          padding: "8px 10px",
+                                          borderRadius: 6,
+                                          border: "1px solid #d1d5db",
+                                          background: userPermission === 'edit' ? "#ffffff" : "#f9fafb",
+                                          outline: "none",
+                                          transition: "all 0.2s ease",
+                                          color: userPermission === 'edit' ? "#111827" : "#9ca3af",
+                                          cursor: userPermission === 'edit' ? "text" : "not-allowed"
+                                        }}
                                     />
                                   </div>
                                 ))}
@@ -2655,72 +3544,85 @@ Your role is to ground creative ideas in practical reality while supporting the 
                                 marginBottom: 8
                               }}>Position</label>
                               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-                                {(["x", "y", "z"] as const).map(pos => (
-                                  <div key={pos}>
-                                    <label style={{ fontSize: 10, color: "#9ca3af", display: "block", marginBottom: 2, textTransform: "uppercase" }}>{pos}</label>
-                                    <input
-                                      type="number"
-                                      value={blockConfig[pos]}
-                                      min={0}
-                                      step={0.1}
-                                      onChange={e => setBlockConfig(prev => ({...prev, [pos]: Number(e.target.value)}))}
-                                      onClick={(e) => e.stopPropagation()}
-                                      style={{
-                                        width: "100%",
-                                        fontSize: 11,
-                                        padding: "6px 8px",
-                                        borderRadius: 4,
-                                        border: "1px solid #d1d5db",
-                                        background: "#ffffff",
-                                        color: "#111827"
-                                      }}
-                                    />
-                                  </div>
-                                ))}
+                              
+                                  {(["x", "y", "z"] as const).map(pos => (
+                                    <div key={pos}>
+                                      <label style={{ fontSize: 10, color: "#9ca3af", display: "block", marginBottom: 2, textTransform: "uppercase" }}>{pos}</label>
+                                      <input
+                                        type="number"
+                                        value={blockConfig[pos]}
+                                        min={0}
+                                        step={0.1}
+                                        onChange={e => {
+                                          userPermission === 'edit' && setBlockConfig(prev => ({...prev, [pos]: Number(e.target.value)}));
+                                        }}
+                                        onClick={(e) => e.stopPropagation()}
+                                        disabled={userPermission !== 'edit'}
+                                        style={{
+                                          width: "100%",
+                                          fontSize: 11,
+                                          padding: "6px 8px",
+                                          borderRadius: 4,
+                                          border: "1px solid #d1d5db",
+                                          background: userPermission === 'edit' ? "#ffffff" : "#f9fafb",
+                                          color: userPermission === 'edit' ? "#111827" : "#9ca3af",
+                                          cursor: userPermission === 'edit' ? "text" : "not-allowed"
+                                        }}
+                                      />
+                                    </div>
+                                  ))}
+                              
                               </div>
                             </div>
 
                             {/* Action Buttons */}
                             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                               <button
-                                onClick={() => setPreviewMode(!previewMode)}
-                                style={{
-                                  background: previewMode ? "#f59e0b" : "#ffffff",
-                                  color: previewMode ? "#ffffff" : "#6b7280",
-                                  border: "1px solid " + (previewMode ? "#f59e0b" : "#d1d5db"),
-                                  borderRadius: 6,
-                                  padding: "10px 12px",
-                                  fontSize: 12,
-                                  fontWeight: 500,
-                                  cursor: "pointer",
-                                  transition: "all 0.2s ease"
-                                }}
+                                onClick={() => userPermission === 'edit' && setPreviewMode(!previewMode)}
+                                disabled={userPermission !== 'edit'}
+                                                                  style={{
+                                    background: userPermission === 'edit' ? (previewMode ? "#f59e0b" : "#ffffff") : "#f3f4f6",
+                                    color: userPermission === 'edit' ? (previewMode ? "#ffffff" : "#6b7280") : "#9ca3af",
+                                    border: "1px solid " + (userPermission === 'edit' ? (previewMode ? "#f59e0b" : "#d1d5db") : "#e5e7eb"),
+                                    borderRadius: 6,
+                                    padding: "10px 12px",
+                                    fontSize: 12,
+                                    fontWeight: 500,
+                                    cursor: userPermission === 'edit' ? "pointer" : "not-allowed",
+                                    transition: "all 0.2s ease",
+                                    opacity: userPermission === 'edit' ? 1 : 0.5
+                                  }}
                               >
                                 Show Preview
                               </button>
                               
                               <button
                                                               onClick={() => {
-                                const newBlock = {
-                                  id: `block_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-                                  name: `Block ${blocks.length + 1}`,
-                                  ...blockConfig,
-                                  color: '#e3e3e3',
-                                  created: new Date()
-                                };
-                                setBlocks(prev => [...prev, newBlock]);
-                                setPreviewMode(false);
+                                if (userPermission === 'edit') {
+                                  const newBlock = {
+                                    id: `block_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                                    name: `Block ${blocks.length + 1}`,
+                                    ...blockConfig,
+                                    color: '#e3e3e3',
+                                    rotation: 0,
+                                    created: new Date()
+                                  };
+                                  setBlocks(prev => [...prev, newBlock]);
+                                  setPreviewMode(false);
+                                }
                               }}
+                                disabled={userPermission !== 'edit'}
                                 style={{
-                                  background: "#3b82f6",
-                                  color: "#ffffff",
+                                  background: userPermission === 'edit' ? "#3b82f6" : "#f3f4f6",
+                                  color: userPermission === 'edit' ? "#ffffff" : "#9ca3af",
                                   border: "none",
                                   borderRadius: 6,
                                   padding: "12px 16px",
                                   fontSize: 13,
                                   fontWeight: 600,
-                                  cursor: "pointer",
-                                  transition: "all 0.2s ease"
+                                  cursor: userPermission === 'edit' ? "pointer" : "not-allowed",
+                                  transition: "all 0.2s ease",
+                                  opacity: userPermission === 'edit' ? 1 : 0.5
                                 }}
                               >
                                 + Add Block
@@ -2765,13 +3667,15 @@ Your role is to ground creative ideas in practical reality while supporting the 
                                   type="color" 
                                   value={color.value} 
                                   onChange={e => color.setter(e.target.value)} 
+                                  disabled={userPermission !== 'edit'}
                                   style={{ 
                                     width: 32, 
                                     height: 32, 
                                     border: "1px solid #d1d5db", 
                                     borderRadius: 6, 
-                                    cursor: "pointer",
-                                    background: "none"
+                                    cursor: userPermission === 'edit' ? "pointer" : "not-allowed",
+                                    background: "none",
+                                    opacity: userPermission === 'edit' ? 1 : 0.5
                                   }} 
                                 />
                                 <div style={{ flex: 1 }}>
@@ -2787,7 +3691,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
                       </div>
                     )}
 
-                    {currentPage === 'objects' && (
+{currentPage === 'objects' && (
                       <div>
                         <h3 style={{ margin: "0 0 16px", fontSize: 16, fontWeight: 600, color: "#111827" }}>Objects</h3>
                         <div style={{
@@ -2810,15 +3714,17 @@ Your role is to ground creative ideas in practical reality while supporting the 
                             }}>Objects</h4>
                             <button
                               onClick={() => setBlocks([])}
+                              disabled={userPermission !== 'edit'}
                               style={{
-                                background: "#fef2f2",
-                                color: "#dc2626",
+                                background: userPermission === 'edit' ? "#fef2f2" : "#f3f4f6",
+                                color: userPermission === 'edit' ? "#dc2626" : "#9ca3af",
                                 border: "1px solid #fecaca",
                                 borderRadius: 6,
                                 padding: "4px 8px",
                                 fontSize: 11,
                                 fontWeight: 500,
-                                cursor: "pointer"
+                                cursor: userPermission === 'edit' ? "pointer" : "not-allowed",
+                                opacity: userPermission === 'edit' ? 1 : 0.5
                               }}
                             >
                               Clear All
@@ -2843,7 +3749,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
                                   cursor: "pointer",
                                   transition: "all 0.2s ease"
                                 }}
-                                onClick={() => setSelectedBlockId(selectedBlockId === block.id ? null : block.id)}
+                                onClick={() => userPermission === 'edit' && setSelectedBlockId(selectedBlockId === block.id ? null : block.id)}
                               >
                                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                                   <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -2873,20 +3779,24 @@ Your role is to ground creative ideas in practical reality while supporting the 
                                     </div>
                                     <button
                                       onClick={(e) => {
-                                        e.stopPropagation();
-                                        setBlocks(prev => prev.filter(b => b.id !== block.id));
-                                        if (selectedBlockId === block.id) setSelectedBlockId(null);
+                                        if (userPermission === 'edit') {
+                                          e.stopPropagation();
+                                          setBlocks(prev => prev.filter(b => b.id !== block.id));
+                                          if (selectedBlockId === block.id) setSelectedBlockId(null);
+                                        }
                                       }}
-                                      style={{
-                                        background: "transparent",
-                                        border: "none",
-                                        color: "#9ca3af",
-                                        cursor: "pointer",
-                                        padding: "4px",
-                                        borderRadius: 4,
-                                        fontSize: 14,
-                                        fontWeight: "bold"
-                                      }}
+                                      disabled={userPermission !== 'edit'}
+                                                                              style={{
+                                          background: "transparent",
+                                          border: "none",
+                                          color: userPermission === 'edit' ? "#9ca3af" : "#d1d5db",
+                                          cursor: userPermission === 'edit' ? "pointer" : "not-allowed",
+                                          padding: "4px",
+                                          borderRadius: 4,
+                                          fontSize: 14,
+                                          fontWeight: "bold",
+                                          opacity: userPermission === 'edit' ? 1 : 0.5
+                                        }}
                                     >
                                       ×
                                     </button>
@@ -2910,20 +3820,24 @@ Your role is to ground creative ideas in practical reality while supporting the 
                                          type="text"
                                          value={block.name}
                                          onChange={(e) => {
-                                           setBlocks(prev => prev.map(b => 
-                                             b.id === block.id ? { ...b, name: e.target.value } : b
-                                           ));
+                                           if (userPermission === 'edit') {
+                                             setBlocks(prev => prev.map(b => 
+                                               b.id === block.id ? { ...b, name: e.target.value } : b
+                                             ));
+                                           }
                                          }}
                                          onClick={(e) => e.stopPropagation()}
+                                         disabled={userPermission !== 'edit'}
                                          style={{
                                            width: "100%",
                                            fontSize: 12,
                                            padding: "8px 12px",
                                            borderRadius: 6,
                                            border: "1px solid #d1d5db",
-                                           background: "#ffffff",
-                                           color: "#111827",
-                                           fontWeight: 500
+                                           background: userPermission === 'edit' ? "#ffffff" : "#f9fafb",
+                                           color: userPermission === 'edit' ? "#111827" : "#9ca3af",
+                                           fontWeight: 500,
+                                           cursor: userPermission === 'edit' ? "text" : "not-allowed"
                                          }}
                                          placeholder="Enter block name"
                                        />
@@ -2967,9 +3881,13 @@ Your role is to ground creative ideas in practical reality while supporting the 
                                             <label style={{ fontSize: 9, color: "#9ca3af", display: "block", marginBottom: 2, textTransform: "uppercase" }}>{axis}</label>
                                                                                          <input
                                                type="number"
-                                               value={blockConfig[axis]}
+                                               value={block[axis]}
                                                step={0.1}
-                                               onChange={e => setBlockConfig(prev => ({...prev, [axis]: Number(e.target.value)}))}
+                                               onChange={(e) => {
+                                                 setBlocks(prev => prev.map(b => 
+                                                   b.id === block.id ? { ...b, [axis]: Number(e.target.value) } : b
+                                                 ));
+                                               }}
                                                onClick={(e) => e.stopPropagation()}
                                                style={{
                                                  width: "100%",
@@ -2995,10 +3913,14 @@ Your role is to ground creative ideas in practical reality while supporting the 
                                             <label style={{ fontSize: 9, color: "#9ca3af", display: "block", marginBottom: 2, textTransform: "uppercase" }}>{dimension}</label>
                                                                                          <input
                                                type="number"
-                                               value={blockConfig[dimension]}
+                                               value={block[dimension]}
                                                min={0.1}
                                                step={0.1}
-                                               onChange={e => setBlockConfig(prev => ({...prev, [dimension]: Number(e.target.value)}))}
+                                               onChange={(e) => {
+                                                 setBlocks(prev => prev.map(b => 
+                                                   b.id === block.id ? { ...b, [dimension]: Number(e.target.value) } : b
+                                                 ));
+                                               }}
                                                onClick={(e) => e.stopPropagation()}
                                                style={{
                                                  width: "100%",
@@ -3012,6 +3934,39 @@ Your role is to ground creative ideas in practical reality while supporting the 
                                              />
                                           </div>
                                         ))}
+                                      </div>
+                                    </div>
+
+                                    <div style={{ marginTop: 12 }}>
+                                      <label style={{ fontSize: 11, color: "#6b7280", marginBottom: 6, display: "block" }}>Rotation</label>
+                                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                        <span style={{ fontSize: 16 }}>⟲</span>
+                                        <input
+                                          type="number"
+                                          min={0}
+                                          max={360}
+                                          step={0.1}
+                                          value={block.rotation !== undefined ? (block.rotation * 180 / Math.PI) : 0}
+                                          onChange={e => {
+                                            const deg = Number(e.target.value);
+                                            setBlocks(prev => prev.map(b =>
+                                              b.id === block.id ? { ...b, rotation: deg * Math.PI / 180 } : b
+                                            ));
+                                          }}
+                                          onClick={e => e.stopPropagation()}
+                                          onFocus={e => e.stopPropagation()}
+                                          style={{
+                                            width: 80,
+                                            fontSize: 13,
+                                            padding: "8px 10px",
+                                            borderRadius: 6,
+                                            border: "1px solid #d1d5db",
+                                            background: "#ffffff",
+                                            color: "#111827",
+                                            textAlign: "center"
+                                          }}
+                                        />
+                                        <span style={{ fontSize: 13, color: "#aaa" }}>°</span>
                                       </div>
                                     </div>
                                   </div>
@@ -3051,58 +4006,64 @@ Your role is to ground creative ideas in practical reality while supporting the 
                                     step={0.1}
                                     value={dim.value}
                                     onChange={(e) => dim.setter(Number(e.target.value))}
+                                    disabled={userPermission !== 'edit'}
                                     style={{
                                       flex: 1,
                                       padding: "8px 12px",
                                       borderRadius: 6,
                                       border: "1px solid #d1d5db",
-                                      background: "#ffffff",
-                                      color: "#111827",
+                                      background: userPermission === 'edit' ? "#ffffff" : "#f9fafb",
+                                      color: userPermission === 'edit' ? "#111827" : "#9ca3af",
                                       fontSize: 14,
                                       fontWeight: 500,
-                                      textAlign: "center"
+                                      textAlign: "center",
+                                      cursor: userPermission === 'edit' ? "text" : "not-allowed"
                                     }}
                                   />
                                   <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                                     <button
                                       onClick={() => dim.setter(Math.min(50, dim.value + 0.5))}
+                                      disabled={userPermission !== 'edit'}
                                       style={{
                                         width: 24,
                                         height: 20,
-                                        background: "#f3f4f6",
+                                        background: userPermission === 'edit' ? "#f3f4f6" : "#f9fafb",
                                         border: "1px solid #d1d5db",
                                         borderRadius: "4px 4px 0 0",
-                                        cursor: "pointer",
+                                        cursor: userPermission === 'edit' ? "pointer" : "not-allowed",
                                         display: "flex",
                                         alignItems: "center",
                                         justifyContent: "center",
                                         fontSize: 10,
-                                        color: "#374151",
-                                        fontWeight: "bold"
+                                        color: userPermission === 'edit' ? "#374151" : "#9ca3af",
+                                        fontWeight: "bold",
+                                        opacity: userPermission === 'edit' ? 1 : 0.5
                                       }}
-                                      onMouseEnter={e => e.currentTarget.style.background = "#e5e7eb"}
-                                      onMouseLeave={e => e.currentTarget.style.background = "#f3f4f6"}
+                                      onMouseEnter={e => userPermission === 'edit' && (e.currentTarget.style.background = "#e5e7eb")}
+                                      onMouseLeave={e => userPermission === 'edit' && (e.currentTarget.style.background = "#f3f4f6")}
                                     >
                                       ▲
                                     </button>
                                     <button
                                       onClick={() => dim.setter(Math.max(1, dim.value - 0.5))}
+                                      disabled={userPermission !== 'edit'}
                                       style={{
                                         width: 24,
                                         height: 20,
-                                        background: "#f3f4f6",
+                                        background: userPermission === 'edit' ? "#f3f4f6" : "#f9fafb",
                                         border: "1px solid #d1d5db",
                                         borderRadius: "0 0 4px 4px",
-                                        cursor: "pointer",
+                                        cursor: userPermission === 'edit' ? "pointer" : "not-allowed",
                                         display: "flex",
                                         alignItems: "center",
                                         justifyContent: "center",
                                         fontSize: 10,
-                                        color: "#374151",
-                                        fontWeight: "bold"
+                                        color: userPermission === 'edit' ? "#374151" : "#9ca3af",
+                                        fontWeight: "bold",
+                                        opacity: userPermission === 'edit' ? 1 : 0.5
                                       }}
-                                      onMouseEnter={e => e.currentTarget.style.background = "#e5e7eb"}
-                                      onMouseLeave={e => e.currentTarget.style.background = "#f3f4f6"}
+                                      onMouseEnter={e => userPermission === 'edit' && (e.currentTarget.style.background = "#e5e7eb")}
+                                      onMouseLeave={e => userPermission === 'edit' && (e.currentTarget.style.background = "#f3f4f6")}
                                     >
                                       ▼
                                     </button>
@@ -3169,25 +4130,30 @@ Your role is to ground creative ideas in practical reality while supporting the 
                                     {categoryItems.map((item, index) => (
                                       <div
                                         key={`${category}-${index}`}
-                                        onClick={() => addLibraryItem(item)}
+                                        onClick={() => userPermission === 'edit' && addLibraryItem(item)}
                                         style={{
-                                          background: "#f9fafb",
+                                          background: userPermission === 'edit' ? "#f9fafb" : "#f3f4f6",
                                           border: "1px solid #e5e7eb",
                                           borderRadius: 6,
                                           padding: "10px 12px",
-                                          cursor: "pointer",
+                                          cursor: userPermission === 'edit' ? "pointer" : "not-allowed",
                                           transition: "all 0.2s ease",
                                           display: "flex",
                                           alignItems: "center",
-                                          justifyContent: "space-between"
+                                          justifyContent: "space-between",
+                                          opacity: userPermission === 'edit' ? 1 : 0.5
                                         }}
                                         onMouseEnter={e => {
-                                          e.currentTarget.style.background = "#eff6ff";
-                                          e.currentTarget.style.borderColor = "#3b82f6";
+                                          if (userPermission === 'edit') {
+                                            e.currentTarget.style.background = "#eff6ff";
+                                            e.currentTarget.style.borderColor = "#3b82f6";
+                                          }
                                         }}
                                         onMouseLeave={e => {
-                                          e.currentTarget.style.background = "#f9fafb";
-                                          e.currentTarget.style.borderColor = "#e5e7eb";
+                                          if (userPermission === 'edit') {
+                                            e.currentTarget.style.background = "#f9fafb";
+                                            e.currentTarget.style.borderColor = "#e5e7eb";
+                                          }
                                         }}
                                       >
                                         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -3212,11 +4178,11 @@ Your role is to ground creative ideas in practical reality while supporting the 
                                         </div>
                                         <div style={{
                                           fontSize: 12,
-                                          color: "#3b82f6",
+                                          color: userPermission === 'edit' ? "#3b82f6" : "#9ca3af",
                                           fontWeight: 500,
-                                          opacity: 0.8
+                                          opacity: userPermission === 'edit' ? 0.8 : 0.5
                                         }}>
-                                          + Add
+                                          {userPermission === 'edit' ? "+ Add" : "View Only"}
                                         </div>
                                       </div>
                                     ))}
@@ -3244,6 +4210,8 @@ Your role is to ground creative ideas in practical reality while supporting the 
               borderRadius: 0,
               boxShadow: 'none',
             }}>
+
+              
               {/* Header */}
               <div
                 onClick={() => router.push('/chat')}
@@ -3282,7 +4250,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
               <div style={{
                 flex: 1,
                 overflowY: 'auto',
-                padding: '16px 20px',
+                padding: '16px 12px',
                 background: '#fafafa',
                 display: 'flex',
                 flexDirection: 'column',
@@ -3326,6 +4294,8 @@ Your role is to ground creative ideas in practical reality while supporting the 
                     </div>
                   </div>
                 )}
+                
+
                 {/* Contextual Suggestions */}
                 {getContextualSuggestions().length > 0 && (
                   <div style={{
@@ -3357,21 +4327,51 @@ Your role is to ground creative ideas in practical reality while supporting the 
                 )}
                 {/* Chat messages */}
                 {chatMessages.map((msg, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                      background: msg.role === 'user' ? '#e0e7ef' : '#fff',
-                      color: '#222',
-                      borderRadius: 8,
-                      padding: '10px 14px',
-                      maxWidth: '80%',
-                      fontSize: 14,
-                      boxShadow: msg.role === 'assistant' ? '0 1px 4px rgba(0,0,0,0.04)' : 'none',
-                      border: msg.role === 'assistant' ? '1px solid #e5e7eb' : 'none',
-                      marginBottom: 2,
-                    }}
-                  >
+                  <div key={i} style={{ marginBottom: 8 }}>
+                    {/* Special handling for multi-agent progress messages */}
+                    {msg.content === 'multi-agent-progress' && msg.progressData ? (
+                      <MultiAgentProgress
+                        orchestratorPlan={msg.progressData.orchestratorPlan}
+                        orchestratorStatus={msg.progressData.orchestratorStatus}
+                        routingInfo={msg.progressData.routingInfo}
+                        agents={msg.progressData.agents}
+                        finalMessage={msg.progressData.finalMessage}
+                        isComplete={msg.progressData.isComplete}
+                      />
+                    ) : msg.clarificationNeeded && msg.questions ? (
+                      /* Special handling for clarification questions */
+                      <ClarificationComponent 
+                        message={msg.content} 
+                        questions={msg.questions}
+                        onSubmit={(selectedActions) => {
+                          // Combine multiple selected actions into a single input
+                          const combinedResponse = selectedActions.join('; ');
+                          setChatInput(combinedResponse);
+                          // Auto-submit the clarification
+                          setTimeout(() => {
+                            const form = document.querySelector('form') as HTMLFormElement;
+                            if (form) form.requestSubmit();
+                          }, 100);
+                        }}
+                      />
+                    ) : (
+                      <div
+                        style={{
+                          alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                          background: msg.role === 'user' ? '#e0e7ef' : '#fff',
+                          color: '#222',
+                          borderRadius: 8,
+                          padding: '12px 16px',
+                          maxWidth: msg.role === 'assistant' && msg.content.includes('Amazon') ? '98%' : '85%',
+                          fontSize: 14,
+                          boxShadow: msg.role === 'assistant' ? '0 1px 4px rgba(0,0,0,0.04)' : 'none',
+                          border: msg.role === 'assistant' ? '1px solid #e5e7eb' : 'none',
+                          marginBottom: 0,
+                          wordWrap: 'break-word',
+                          overflowWrap: 'break-word',
+                          whiteSpace: 'pre-wrap',
+                        }}
+                      >
                     {/* Agent header for assistant messages */}
                     {msg.role === 'assistant' && msg.agent && (
                       <div style={{
@@ -3406,7 +4406,13 @@ Your role is to ground creative ideas in practical reality while supporting the 
                       </div>
                     )}
                     {/* Message content */}
-                    <div>{msg.content}</div>
+                    <div style={{ 
+                      lineHeight: '1.5',
+                      wordWrap: 'break-word',
+                      overflowWrap: 'break-word'
+                    }}>
+                      {renderMessageContent(msg.content)}
+                    </div>
                     {/* Reasoning footer for assistant messages */}
                     {msg.role === 'assistant' && msg.reasoning && (
                       <div style={{
@@ -3420,8 +4426,200 @@ Your role is to ground creative ideas in practical reality while supporting the 
                         💭 {msg.reasoning}
                       </div>
                     )}
+                    
+                    {/* Amazon Knowledge Base footer with toggle button */}
+                    {msg.role === 'assistant' && msg.agent === 'amazon-knowledge-base' && msg.amazonResults && (
+                      <div style={{
+                        marginTop: '8px',
+                        paddingTop: '6px',
+                        borderTop: '1px solid #f3f4f6',
+                      }}>
+                        <div style={{
+                          fontSize: '11px',
+                          color: '#6b7280',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          marginBottom: '8px',
+                        }}>
+                          <img 
+                            src="/images/amazonlogo.png" 
+                            alt="Amazon" 
+                            style={{ width: '12px', height: '12px' }} 
+                          />
+                          Amazon Knowledge Base
+                        </div>
+                        
+                        {/* Toggle button inside the message */}
+                        {msg.amazonResults.products && msg.amazonResults.products.length > 0 && (
+                          <button
+                            onClick={() => {
+                              const updatedMessages = chatMessages.map((message, index) => {
+                                if (message === msg) {
+                                  return { ...message, showAllProducts: !message.showAllProducts };
+                                }
+                                return message;
+                              });
+                              setChatMessages(updatedMessages);
+                            }}
+                            style={{
+                              background: msg.showAllProducts ? '#fef3c7' : '#f3f4f6',
+                              border: msg.showAllProducts ? '2px solid #f59e0b' : '1px solid #d1d5db',
+                              borderRadius: '8px',
+                              padding: '8px 12px',
+                              fontSize: '12px',
+                              fontWeight: '500',
+                              color: msg.showAllProducts ? '#92400e' : '#374151',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              transition: 'all 0.2s ease',
+                              boxShadow: msg.showAllProducts ? '0 2px 4px rgba(245, 158, 11, 0.2)' : '0 1px 2px rgba(0, 0, 0, 0.05)',
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.transform = 'translateY(-1px)';
+                              e.currentTarget.style.boxShadow = msg.showAllProducts 
+                                ? '0 4px 8px rgba(245, 158, 11, 0.3)' 
+                                : '0 2px 4px rgba(0, 0, 0, 0.1)';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.transform = 'translateY(0)';
+                              e.currentTarget.style.boxShadow = msg.showAllProducts 
+                                ? '0 2px 4px rgba(245, 158, 11, 0.2)' 
+                                : '0 1px 2px rgba(0, 0, 0, 0.05)';
+                            }}
+                          >
+                            {msg.showAllProducts ? 'Hide Products' : `Show All ${msg.amazonResults.total_results} Products`}
+                          </button>
+                        )}
+                        
+                        {/* Products list inside the message */}
+                        {msg.showAllProducts && msg.amazonResults.products && (
+                          <div style={{
+                            marginTop: '12px',
+                            background: '#f9fafb',
+                            border: '1px solid #e5e7eb',
+                            borderRadius: '8px',
+                            padding: '16px',
+                            maxHeight: '400px',
+                            overflowY: 'auto',
+                          }}>
+                            <div style={{
+                              fontSize: '14px',
+                              fontWeight: '600',
+                              color: '#111827',
+                              marginBottom: '12px',
+                            }}>
+                              All Amazon Products ({msg.amazonResults.total_results} results)
+                            </div>
+                            
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                              {msg.amazonResults.products.map((product: any, index: number) => (
+                                <div key={index} style={{
+                                  background: '#fff',
+                                  border: '1px solid #e5e7eb',
+                                  borderRadius: '6px',
+                                  padding: '16px',
+                                  transition: 'all 0.2s ease',
+                                }}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.borderColor = '#d1d5db';
+                                  e.currentTarget.style.boxShadow = '0 2px 4px rgba(0, 0, 0, 0.05)';
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.borderColor = '#e5e7eb';
+                                  e.currentTarget.style.boxShadow = 'none';
+                                }}
+                                >
+                                  <div style={{
+                                    display: 'flex',
+                                    gap: '12px',
+                                    alignItems: 'flex-start',
+                                  }}>
+                                    {product.image && (
+                                      <img 
+                                        src={product.image} 
+                                        alt={product.title}
+                                        style={{
+                                          width: '80px',
+                                          height: '80px',
+                                          objectFit: 'cover',
+                                          borderRadius: '4px',
+                                          border: '1px solid #e5e7eb',
+                                          flexShrink: 0,
+                                        }}
+                                      />
+                                    )}
+                                    
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                      <div style={{
+                                        fontSize: '14px',
+                                        fontWeight: '500',
+                                        color: '#111827',
+                                        marginBottom: '6px',
+                                        lineHeight: '1.4',
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        display: '-webkit-box',
+                                        WebkitLineClamp: 2,
+                                        WebkitBoxOrient: 'vertical',
+                                      }}>
+                                        {product.title}
+                                      </div>
+                                      
+                                      <div style={{ 
+                                        color: '#059669', 
+                                        fontWeight: '600', 
+                                        marginBottom: '4px',
+                                        fontSize: '16px',
+                                      }}>
+                                        ${product.price.current_price}
+                                      </div>
+                                      
+                                      <div style={{ 
+                                        color: '#6b7280', 
+                                        fontSize: '12px',
+                                        marginBottom: '6px',
+                                      }}>
+                                        {product.rating}★ ({product.ratings_total} reviews) • {product.prime ? 'Prime' : 'Not Prime'}
+                                      </div>
+                                      
+                                      <a
+                                        href={product.link}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        style={{
+                                          color: '#3b82f6',
+                                          textDecoration: 'none',
+                                          fontSize: '12px',
+                                          fontWeight: '500',
+                                        }}
+                                        onMouseEnter={(e) => {
+                                          e.currentTarget.style.textDecoration = 'underline';
+                                        }}
+                                        onMouseLeave={(e) => {
+                                          e.currentTarget.style.textDecoration = 'none';
+                                        }}
+                                      >
+                                        View on Amazon →
+                                      </a>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                    )}
                   </div>
                 ))}
+                
+
+                
                 {/* Loading indicator */}
                 {isLoading && (
                   <div style={{
@@ -3440,6 +4638,9 @@ Your role is to ground creative ideas in practical reality while supporting the 
                     <div>Thinking</div>
                   </div>
                 )}
+                
+                {/* Scroll target for auto-scroll */}
+                <div ref={messagesEndRef} />
               </div>
               {/* Input */}
               <form
@@ -3460,10 +4661,51 @@ Your role is to ground creative ideas in practical reality while supporting the 
                   justifyContent: 'flex-start',
                 }}
               >
+                {/* Amazon Knowledge Base Toggle */}
+                <div style={{
+                  padding: '8px 18px 0px 0px',
+                  display: 'flex',
+                  alignItems: 'center',
+                }}>
+                  <button
+                    onClick={() => {
+                      const newState = !amazonKnowledgeBaseEnabled;
+                      setAmazonKnowledgeBaseEnabled(newState);
+                      // No need to reset Amazon states - they're now part of message data
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '6px 12px',
+                      borderRadius: '6px',
+                      border: '1px solid #e5e7eb',
+                      background: amazonKnowledgeBaseEnabled ? '#000' : '#fff',
+                      color: amazonKnowledgeBaseEnabled ? '#fff' : '#374151',
+                      fontSize: '12px',
+                      fontWeight: 500,
+                      cursor: 'pointer',
+                      transition: 'all 0.2s',
+                    }}
+                  >
+                    <img 
+                      src={amazonKnowledgeBaseEnabled ? "/images/amazonlogoinverse.png" : "/images/amazonlogo.png"}
+                      alt="Amazon" 
+                      style={{ 
+                        width: '16px', 
+                        height: '16px'
+                      }} 
+                    />
+                    {isSearchingProducts ? 'Searching...' : 'Amazon Knowledge Base'}
+                  </button>
+                </div>
+                
                 <textarea
                   value={chatInput}
                   onChange={e => setChatInput(e.target.value)}
-                  placeholder="Ask about your room design..."
+                  placeholder={multiAgentMode 
+                    ? "Ask complex design questions - I'll use multiple AI agents to create your perfect room..." 
+                    : "Ask about your room design..."}
                   style={{
                     width: '100%',
                     height: '75%',
@@ -3499,6 +4741,41 @@ Your role is to ground creative ideas in practical reality while supporting the 
                     }
                   }}
                 />
+                
+                {/* Multi-Agent Toggle */}
+                <div style={{ display: 'flex', alignItems: 'center', marginTop: 8, marginBottom: 5 }}>
+                  <button
+                    type="button"
+                    onClick={() => setMultiAgentMode(!multiAgentMode)}
+                    style={{
+                      padding: '6px 12px',
+                      borderRadius: 20,
+                      border: multiAgentMode ? '2px solid #fad600' : '2px solid #e5e7eb',
+                      background: multiAgentMode ? '#fad600' : '#fff',
+                      color: multiAgentMode ? '#18181b' : '#666',
+                      fontSize: 11,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      transition: 'all 0.15s',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 4
+                    }}
+                  >
+                    🤖 Multi-Agent {multiAgentMode ? 'ON' : 'OFF'}
+                  </button>
+                  {multiAgentMode && (
+                    <span style={{
+                      marginLeft: 8,
+                      fontSize: 10,
+                      color: '#666',
+                      fontStyle: 'italic'
+                    }}>
+                      AI agents will collaborate to design your room
+                    </span>
+                  )}
+                </div>
+                
                 <button
                   type="submit"
                   disabled={isLoading || !chatInput.trim()}
@@ -3525,6 +4802,38 @@ Your role is to ground creative ideas in practical reality while supporting the 
           )}
         </div>
       </div>
+      {/* Share Modal */}
+      <ShareModal
+        open={shareModalOpen}
+        onClose={() => setShareModalOpen(false)}
+        roomId={roomId || ""}
+        roomName={roomName}
+        owner={owner}
+        sharedWith={sharedWith}
+        linkSharing={linkSharing}
+        onUpdateShare={async ({ sharedWith, linkSharing }) => {
+          setSharedWith(sharedWith);
+          setLinkSharing(linkSharing);
+          
+          // Save shared users with permissions to Firebase (only for owners)
+          if (roomId && user && isOwner) {
+            try {
+              const roomRef = doc(db, "rooms", roomId);
+              
+              // Update the room document with sharedWith (includes emails and permissions)
+              await updateDoc(roomRef, {
+                sharedWith: sharedWith,
+                sharedWithEmails: sharedWith.map(user => user.email), // Keep for backward compatibility
+                editorEmails: sharedWith.filter(user => user.permission === 'edit').map(user => user.email) // Separate array for editors
+              });
+              
+              console.log("Shared users updated in Firebase:", sharedWith);
+            } catch (error) {
+              console.error("Error updating shared users in Firebase:", error);
+            }
+          }
+        }}
+      />
     </div>
   );
 }
@@ -3581,3 +4890,5 @@ function InsideControls({ insideActive, insidePos, setInsidePos, roomDims, insid
   }, [insideActive, roomDims.x, roomDims.z, camera, setInsidePos, insideKeys]);
   return null;
 }
+
+

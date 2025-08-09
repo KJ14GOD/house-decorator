@@ -1515,7 +1515,7 @@ export default function Home() {
           animation: 'typewriter 15s linear infinite 4s',
           whiteSpace: 'nowrap'
         }}>
-          CREATES
+          CREATE
         </div>
         
         {/* Hover Effect */}

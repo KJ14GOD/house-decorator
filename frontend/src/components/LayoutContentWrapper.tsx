@@ -9,6 +9,7 @@ interface LayoutContentWrapperProps {
 export default function LayoutContentWrapper({
   children,
 }: LayoutContentWrapperProps) {
+  const isPinboard = typeof window !== 'undefined' && window.location.pathname.startsWith('/pinboard');
   return (
     <>
       {/* Global CSS to hide scroll bars */}
@@ -37,7 +38,7 @@ export default function LayoutContentWrapper({
       {/* Vertical Guide Lines */}
       <div style={{
         position: 'fixed',
-        top: 64,
+        top: isPinboard ? 0 : 64,
         bottom: 0,
         left: 'calc(8vw + 40px)',
         width: '1px',
@@ -49,7 +50,7 @@ export default function LayoutContentWrapper({
 
       <div style={{
         position: 'fixed',
-        top: 64,
+        top: isPinboard ? 0 : 64,
         bottom: 0,
         right: 'calc(8vw + 40px)',
         width: '1px',
@@ -62,13 +63,13 @@ export default function LayoutContentWrapper({
       {/* Main Content Wrapper */}
       <div style={{
         position: 'absolute',
-        top: 64, /* Adjust based on Navbar height */
+        top: isPinboard ? 0 : 64,
         left: 'min(calc(8vw + 40px), 120px)',
         right: 'min(calc(8vw + 40px), 120px)',
         bottom: 0,
         overflowY: 'auto',
         zIndex: 2,
-        padding: 'clamp(24px, 4vw, 72px) clamp(24px, 4vw, 48px)' /* Responsive padding */
+        padding: 'clamp(24px, 4vw, 72px) clamp(24px, 4vw, 48px)'
       }}>
         {/* Inner Content Container */}
         <div style={{
