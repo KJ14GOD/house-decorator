@@ -12,3 +12,5 @@ venv/
 **/venv/**
 backend/venv/
 backend/multi_agent_system/venv/
+frontend/node_modules/
+backend/clip_server/*.pt
