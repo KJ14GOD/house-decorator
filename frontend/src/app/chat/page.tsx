@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Sidebar from '../../components/Sidebar';
 import { useAuth } from '@/context/AuthContext';
@@ -292,6 +292,7 @@ export default function ChatPage() {
   const [chats, setChats] = useState<Array<{ id: string; title: string; snippet: string; timestamp: string }>>([]);
   const [selectedChat, setSelectedChat] = useState<string | undefined>(undefined);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
 
   // Plus button menu state for empty state
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
@@ -313,14 +314,24 @@ export default function ChatPage() {
     'Finalizing response...'
   ];
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  const scrollToBottom = useCallback(() => {
+    requestAnimationFrame(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    });
+  }, []);
 
   useEffect(() => {
     const chatId = typeof selectedChat === 'string' ? selectedChat : '';
     scrollToBottom();
   }, [typeof selectedChat === 'string' ? chatMessages[selectedChat] : undefined]);
+
+  // Debounce search to improve performance
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search]);
 
   // Live timer effect
   useEffect(() => {
@@ -366,6 +377,9 @@ export default function ChatPage() {
     const userMessage = inputMessage.trim();
     setInputMessage('');
     setIsLoading(true);
+
+    // Check for @search keyword to trigger search mode
+   
 
     let newChatId = selectedChat;
     let updatedChats = chats;
@@ -512,27 +526,26 @@ export default function ChatPage() {
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
+  const handleKeyPress = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSubmit(e as any);
     }
-  };
+  }, [handleSubmit]);
 
-  // Sidebar chat selection
-  const handleSelectChat = (id: string) => {
+  // Memoize sidebar handlers
+  const handleSelectChat = useCallback((id: string) => {
     setSelectedChat(id);
     setInputMessage("");
-  };
+  }, []);
 
-  // Sidebar new chat
-  const handleNewChat = () => {
+  const handleNewChat = useCallback(() => {
     setSelectedChat(undefined);
     setInputMessage("");
     setDeepResearchMode(false);
     setUseLangGraph(false);
     setPlusMenuOpen(false);
-  };
+  }, []);
 
   const formatTime = (timestamp: number) => {
     return new Date(timestamp).toLocaleTimeString('en-US', {
@@ -557,8 +570,8 @@ export default function ChatPage() {
     level: number;
   }
 
-  // Function to extract and render sources as cards
-  const extractSources = (content: string): Source[] => {
+  // Memoize expensive source extraction
+  const extractSources = useCallback((content: string): Source[] => {
     const sources: Source[] = [];
     
     // AGGRESSIVE URL extraction - capture EVERYTHING from console logs
@@ -737,10 +750,10 @@ export default function ChatPage() {
     );
     
     return uniqueSources;
-  };
+  }, []);
 
-  // Function to parse and structure research content
-  const parseResearchContent = (content: string): { sections: ParsedSection[], sources: Source[] } => {
+  // Memoize research content parsing
+  const parseResearchContent = useCallback((content: string): { sections: ParsedSection[], sources: Source[] } => {
     const sources = extractSources(content);
     
     // Split content into sections
@@ -755,7 +768,7 @@ export default function ChatPage() {
     });
 
     return { sections: parsedSections, sources };
-  };
+  }, [extractSources]);
 
   // Modern Perplexity-style renderer
   const renderModernResponse = (content: string) => {
@@ -1002,10 +1015,12 @@ export default function ChatPage() {
   const chatId = typeof selectedChat === 'string' ? selectedChat : '';
   const messages = chatId ? chatMessages[chatId] || [] : [];
 
-  // Filter chats for the search bar
-  const filteredChats = chats.filter(chat =>
-    chat.title.toLowerCase().includes(search.toLowerCase()) ||
-    chat.snippet.toLowerCase().includes(search.toLowerCase())
+  // Memoize filtered chats using debounced search to avoid recalculation on every keystroke
+  const filteredChats = useMemo(() => 
+    chats.filter(chat =>
+      chat.title.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
+      chat.snippet.toLowerCase().includes(debouncedSearch.toLowerCase())
+    ), [chats, debouncedSearch]
   );
 
   return (
@@ -1290,7 +1305,7 @@ export default function ChatPage() {
               }}
             />
             <div style={{ maxHeight: 300, overflowY: 'auto' }}>
-              {(() => {
+              {useMemo(() => {
                 const filteredModalChats = chats.filter(chat =>
                   chat.title.toLowerCase().includes(modalSearch.toLowerCase()) ||
                   chat.snippet.toLowerCase().includes(modalSearch.toLowerCase())
@@ -1336,7 +1351,7 @@ export default function ChatPage() {
                     </div>
                   ))
                 );
-              })()}
+              }, [chats, modalSearch, selectedChat, handleSelectChat])}
             </div>
           </div>
         </div>
@@ -1641,7 +1656,9 @@ function ChatInputBar({
       <div style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
         <textarea
           value={inputMessage}
-          onChange={(e) => setInputMessage(e.target.value)}
+          onChange={useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+            setInputMessage(e.target.value);
+          }, [])}
           onKeyPress={handleKeyPress}
           placeholder={deepResearchMode && useLangGraph
             ? "Ask for in-depth, multi-step research or advanced design analysis..."
@@ -1666,11 +1683,13 @@ function ChatInputBar({
             fontWeight: 400,
           }}
           rows={1}
-          onInput={(e) => {
+          onInput={useCallback((e: React.FormEvent<HTMLTextAreaElement>) => {
             const target = e.target as HTMLTextAreaElement;
-            target.style.height = 'auto';
-            target.style.height = `${Math.min(target.scrollHeight, 120)}px`;
-          }}
+            requestAnimationFrame(() => {
+              target.style.height = 'auto';
+              target.style.height = `${Math.min(target.scrollHeight, 120)}px`;
+            });
+          }, [])}
         />
         {/* Up arrow submit button, right-aligned */}
         <button

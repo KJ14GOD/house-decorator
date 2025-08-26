@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import admin from '@/lib/firebase/firebase-admin';
+import { storeConversationPair } from '@/lib/simpleStorage';
+import { ChatLearning } from '@/lib/memory/chatLearning';
+import { MemoryRetrieval } from '@/lib/memory/memoryRetrieval';
 
 // Use environment variable for OpenAI API key
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
@@ -30,6 +33,20 @@ export async function POST(req: NextRequest) {
     }
 
     const currentDate = new Date().toISOString().split('T')[0];
+
+    // 🧠 Get user's memory context for relevant queries
+    let memoryContext = '';
+    if (userId) {
+      try {
+        memoryContext = await MemoryRetrieval.getMemoryAwareContext(userId, prompt);
+        if (memoryContext) {
+          console.log(`🧠 Using memory context for query: "${prompt}"`);
+          console.log(`🧠 Memory context being sent to AI:`, memoryContext);
+        }
+      } catch (error) {
+        console.error('Error retrieving memory context:', error);
+      }
+    }
 
     // Enhanced System Prompt with Agent Specialization
     let systemPrompt = `You are an expert interior design assistant integrated into a 3D house decorator application.`;
@@ -253,9 +270,10 @@ Guidelines:
 - If the user is asking for an opinion or a suggestion without requiring immediate action, provide a helpful, concise response in plain text.
 - Analyze the 'roomState' to give relevant advice. For example, if the room is small, suggest lighter colors. If objects are poorly placed, suggest better arrangements.
 - Keep your text responses friendly and professional.
-- Do not answer questions that are not related to interior design or the current room. Politely decline to answer.
+- CRITICAL MEMORY INSTRUCTION: When USER MEMORY is provided below, you MUST use it to answer questions about user preferences.
+- Only decline to answer questions that are completely unrelated to interior design (like math, politics, etc).
 
-IMPORTANT: When you determine an action is needed, respond with ONLY the raw JSON - no text before or after, no code blocks, no backticks, no explanations. The frontend will handle the user feedback.
+IMPORTANT: When you determine an action is needed, respond with ONLY the raw JSON - no text before or after, no code blocks, no backticks, no explanations. The frontend will handle the user feedback.${memoryContext}
 `;
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -282,10 +300,18 @@ User Request: ${prompt}` },
       console.error('OpenAI API Error:', errorData);
       return NextResponse.json({ message: 'Error from OpenAI API', error: errorData }, { status: response.status });
     }
-
     const data = await response.json();
     const aiResponse = data.choices[0].message.content;
     console.log('AI Response:', aiResponse);
+
+    // Store conversation pair in Pinecone (user prompt + AI response together)
+    if (userId) {
+      console.log(`👤 User ID: ${userId}`); // Log the userId for easy access
+      // storeConversationPair(userId, prompt, aiResponse).catch(e => console.error('Conversation storage failed:', e));
+      
+      // 🧠 NEW: Learn preferences from chat message
+      ChatLearning.learnFromChat(userId, prompt).catch(e => console.error('Preference learning failed:', e));
+    }
 
     if (aiResponse.trim().startsWith('{') || aiResponse.trim().startsWith('[')) {
       try {

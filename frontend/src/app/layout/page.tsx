@@ -1,9 +1,9 @@
 "use client";
-import React, { useState, useRef, useEffect, Suspense } from "react";
+import React, { useState, useRef, useEffect, Suspense, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Canvas } from "@react-three/fiber";
-import { OrbitControls } from "@react-three/drei";
+import { OrbitControls, useGLTF } from "@react-three/drei";
 import * as THREE from 'three';
 import { ChevronUp, ChevronDown, X, Pencil, Trash2, Search, Check, Folder, ChevronRight, Info } from 'lucide-react';
 import { useAuth } from "@/context/AuthContext";
@@ -11,6 +11,129 @@ import { db } from "@/lib/firebase/firebase";
 import { collection, addDoc, query, where, getDocs, serverTimestamp, doc, updateDoc, deleteDoc } from "firebase/firestore";
 import { analyzeAndBuildRoomModel, RoomModelResult } from '@/lib/prebuild/imageTo3D';
 import LayoutContentWrapper from "@/components/LayoutContentWrapper";
+
+function GLBModelPreview({ block, scale, roomWidth, roomLength }: {
+  block: any;
+  scale: number;
+  roomWidth: number;
+  roomLength: number;
+}) {
+  console.log('Loading GLB model for thumbnail:', block.modelPath, 'for block:', block.name);
+  const gltfResult = useGLTF(block.modelPath);
+  console.log('GLTF result:', gltfResult);
+  const { scene } = gltfResult;
+  console.log('GLB model loaded successfully for thumbnail:', block.modelPath);
+  
+  // Clone the scene to avoid reusing the same instance
+  const clonedScene = scene.clone();
+  
+  // Debug: Log materials to see what's available and fix material properties
+  clonedScene.traverse((child) => {
+    if (child.isMesh) {
+      console.log('GLB Preview Mesh material:', child.name, child.material);
+      if (child.material.map) {
+        console.log('Preview has texture:', child.material.map);
+      }
+      if (child.material.color) {
+        console.log('Preview material color:', child.material.color);
+      }
+      
+      // Fix common material issues for preview
+      if (child.material) {
+        // Ensure materials receive lighting properly
+        child.material.needsUpdate = true;
+        
+        // If it's a MeshStandardMaterial, ensure proper settings
+        if (child.material.type === 'MeshStandardMaterial') {
+          child.material.roughness = child.material.roughness || 0.8;
+          child.material.metalness = child.material.metalness || 0.0;
+        }
+        
+        // If the material is too dark, adjust it
+        if (child.material.color && child.material.color.getHSL) {
+          const hsl = {};
+          child.material.color.getHSL(hsl);
+          console.log('Preview Material HSL:', hsl);
+          // If lightness is very low, increase it slightly
+          if (hsl.l < 0.2) {
+            child.material.color.setHSL(hsl.h, hsl.s, Math.max(0.3, hsl.l));
+            console.log('Adjusted preview material color for better visibility');
+          }
+        }
+      }
+    }
+  });
+  
+  // Calculate original model bounding box
+  const originalBox = new THREE.Box3().setFromObject(clonedScene);
+  const modelWidth = originalBox.max.x - originalBox.min.x;
+  const modelHeight = originalBox.max.y - originalBox.min.y;
+  const modelDepth = originalBox.max.z - originalBox.min.z;
+  
+  // Calculate scale to fit block dimensions
+  const scaleX = (block.width * scale) / modelWidth;
+  const scaleY = (block.height * scale) / modelHeight;
+  const scaleZ = (block.depth * scale) / modelDepth;
+  
+  // Center the model's origin
+  const modelCenterX = (originalBox.max.x + originalBox.min.x) / 2;
+  const modelCenterY = (originalBox.max.y + originalBox.min.y) / 2;
+  const modelCenterZ = (originalBox.max.z + originalBox.min.z) / 2;
+  
+  // Calculate the final position to match box geometry positioning
+  const glbPosition = [
+    (block.x + block.width/2) * scale - roomWidth/2,
+    (block.y + block.height/2) * scale,
+    (block.z + block.depth/2) * scale - roomLength/2
+  ] as [number, number, number];
+  
+  return (
+    <group 
+      position={glbPosition}
+      rotation={[0, block.rotation || 0, 0]}
+    >
+      <primitive
+        object={clonedScene}
+        position={[-modelCenterX * scaleX, -modelCenterY * scaleY, -modelCenterZ * scaleZ]}
+        scale={[scaleX, scaleY, scaleZ]}
+      />
+    </group>
+  );
+}
+
+// Block renderer for room previews
+function BlockRendererPreview({ block, scale, roomWidth, roomLength }: { 
+  block: any; 
+  scale: number; 
+  roomWidth: number; 
+  roomLength: number; 
+}) {
+  // Position for box geometry (centered)
+  const boxPosition = [
+    (block.x + block.width/2) * scale - roomWidth/2,
+    (block.y + block.height/2) * scale,
+    (block.z + block.depth/2) * scale - roomLength/2
+  ] as [number, number, number];
+
+  if (block.modelPath) {
+    return (
+      <GLBModelPreview 
+        block={block}
+        scale={scale}
+        roomWidth={roomWidth}
+        roomLength={roomLength}
+      />
+    );
+  }
+
+  // Default box geometry fallback
+  return (
+    <mesh position={boxPosition}>
+      <boxGeometry args={[block.width * scale, block.height * scale, block.depth * scale]} />
+      <meshStandardMaterial key={`block-material-${block.id}-${block.color}`} color={new THREE.Color(block.color || '#cccccc')} />
+    </mesh>
+  );
+}
 
 // This is a proper room preview for the cards
 function RoomBoxPreview({ width, length, height, floorColor, ceilingColor, wallFrontColor, wallBackColor, wallLeftColor, wallRightColor, blocks }: {
@@ -33,6 +156,7 @@ function RoomBoxPreview({ width, length, height, floorColor, ceilingColor, wallF
     height: number, 
     depth: number,
     color: string,
+    modelPath?: string,
     created: Date
   }>;
 }) {
@@ -80,16 +204,28 @@ function RoomBoxPreview({ width, length, height, floorColor, ceilingColor, wallF
         <meshStandardMaterial key={`wall-right-material-${wallRightColor}`} color={new THREE.Color(wallRightColor || '#e3e3e3')} />
       </mesh>
 
-      {/* Render all blocks as colored boxes inside the room */}
+      {/* Render all blocks as colored boxes or GLB models inside the room */}
       {blocks && blocks.map((block, i) => (
-        <mesh key={`block-${block.id || i}`} position={[
-          (block.x + block.width/2) * scale - w/2,
-          (block.y + block.height/2) * scale,
-          (block.z + block.depth/2) * scale - l/2
-        ]}>
-          <boxGeometry args={[block.width * scale, block.height * scale, block.depth * scale]} />
-          <meshStandardMaterial key={`block-material-${block.id || i}-${block.color}`} color={new THREE.Color(block.color || '#cccccc')} />
-        </mesh>
+        <Suspense 
+          key={`block-${block.id || i}`} 
+          fallback={
+            <mesh position={[
+              (block.x + block.width/2) * scale - w/2,
+              (block.y + block.height/2) * scale,
+              (block.z + block.depth/2) * scale - l/2
+            ]}>
+              <boxGeometry args={[block.width * scale, block.height * scale, block.depth * scale]} />
+              <meshStandardMaterial color={new THREE.Color(block.color || '#cccccc')} />
+            </mesh>
+          }
+        >
+          <BlockRendererPreview 
+            block={block}
+            scale={scale}
+            roomWidth={w}
+            roomLength={l}
+          />
+        </Suspense>
       ))}
     </group>
   );
@@ -1116,6 +1252,8 @@ export default function LayoutPage() {
                             e.currentTarget.style.background = '#facc15';
                           }
                         }}
+
+                        
                       >
                         <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
                           <path d="M4 10H16M16 10L11 5M16 10L11 15" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" opacity={(isChatLoading || !(chatInput || '').trim()) ? 0.7 : 1} />

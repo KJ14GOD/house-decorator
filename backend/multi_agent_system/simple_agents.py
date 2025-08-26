@@ -1,5 +1,5 @@
 import os
-from typing import TypedDict, List, Dict, Any, Literal
+from typing import TypedDict, List, Dict, Any, Literal, Optional
 from langchain.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END, START
@@ -40,6 +40,7 @@ class RoomState(BaseModel):
 class DesignRequest(BaseModel):
     user_input: str
     room_state: RoomState
+    userId: Optional[str] = None
 
 class DesignResponse(BaseModel):
     message: str
@@ -74,7 +75,7 @@ FURNITURE_LIBRARY = [
     {"name": "King Bed", "width": 6, "height": 2, "depth": 6.5, "color": "#8B4513", "category": "Bedroom"},
     {"name": "Nightstand", "width": 1.5, "height": 2, "depth": 1.5, "color": "#654321", "category": "Bedroom"},
     {"name": "Dresser", "width": 5, "height": 3, "depth": 1.5, "color": "#654321", "category": "Bedroom"},
-    {"name": "Sofa", "width": 7, "height": 2.5, "depth": 3, "color": "#4A5568", "category": "Living Room"},
+    {"name": "Sofa", "width": 3, "height": 2.5, "depth": 7, "color": "#4A5568", "category": "Living Room"},
     {"name": "Coffee Table", "width": 4, "height": 1.5, "depth": 2, "color": "#8B4513", "category": "Living Room"},
     {"name": "TV Stand", "width": 5, "height": 2, "depth": 1.5, "color": "#2D3748", "category": "Living Room"},
     {"name": "Armchair", "width": 3, "height": 3, "depth": 3, "color": "#4A5568", "category": "Living Room"},
@@ -479,11 +480,13 @@ def furniture_agent(state: AgentState) -> AgentState:
     furniture_tools = [add_furniture, move_furniture, remove_furniture, list_available_furniture]
     agent = create_react_agent(llm, furniture_tools)
     
-    # Create context-aware prompt
+    # Create context-aware prompt with proactive intelligence
     room_info = state['room_state']
     intent = state.get('user_intent', {})
     style = intent.get('style') or 'appropriate style'
     scope = intent.get('scope') or 'tweak'
+    proactive_context = state.get('proactive_context', '')
+    
     context = f"""
     Current room: {room_info['width']}x{room_info['length']}ft room with {len(room_info.get('blocks', []))} furniture pieces.
     User request: {state['user_query']}
@@ -491,13 +494,16 @@ def furniture_agent(state: AgentState) -> AgentState:
     Role: You are a professional furniture placement expert. Optimize function, flow, and aesthetics.
     Style emphasis: {style}. Scope: {scope}.
 
+    {proactive_context}
+
     Requirements:
     - You MUST use the provided tools to make changes. Don't just describe; take actions with tools.
     - Only add furniture that exists in the library. Call list_available_furniture first if unsure.
     - Use exact names from the library (e.g., 'Sofa', 'Coffee Table', 'Single Bed').
     - For "fully furnished" or comprehensive requests, propose a complete set: seating, surfaces, storage as relevant.
+    - BE PROACTIVE: If user preferences are available, suggest furniture that matches their style preferences
     - Ensure choices reflect the style and scope. Avoid repeating the same set for different user goals.
-    - After actions, provide a concise summary of the plan you executed.
+    - After actions, provide a concise summary of the plan you executed with proactive suggestions if relevant.
     """
 
     # If collision data exists in state, append a collision-resolution brief
@@ -578,37 +584,46 @@ def color_agent(state: AgentState) -> AgentState:
     color_tools = [change_wall_color, change_ceiling_color, change_floor_color, analyze_room_colors, suggest_color_palette]
     agent = create_react_agent(llm, color_tools)
     
-    # Create context-aware prompt
+    # Create context-aware prompt with proactive intelligence
     room_info = state['room_state']
     intent = state.get('user_intent', {})
     mood = intent.get('mood') or 'cohesive'
     style = intent.get('style') or 'appropriate style'
+    memory_context = state.get('memory_context', '')
+    proactive_context = state.get('proactive_context', '')
     
-    # Mood-guided palette suggestions
+    # Mood-guided palette suggestions (ONLY if no memory preferences available)
     cool_guidance = "Cool palettes: Walls #A0C4FF to #8FAADC (soft/calm blues), Ceiling #FFFFFF or #EBEBEB to keep it open, Floor neutral light wood or keep current if already light."
     warm_guidance = "Warm palettes: Walls #D2691E/#CD853F/#F4A460 (warm tones), Ceiling near-white, Floor warm medium wood."
     mood_guidance = cool_guidance if mood in ["cool", "chilly"] else warm_guidance
 
-    # Prepare context for the agent
+    # Prepare context for the agent with proactive intelligence
     context = f"""
     Current room colors:
     - Walls: Front({room_info.get('wallFrontColor', '#FFFFFF')}), Back({room_info.get('wallBackColor', '#FFFFFF')})
     - Ceiling: {room_info.get('ceilingColor', '#FFFFFF')}
     - Floor: {room_info.get('floorColor', '#8B4513')}
     
+    {proactive_context}
+    
     You are a color coordination expert. CRITICAL INSTRUCTIONS:
     
-    1. **HONOR EXPLICIT USER REQUESTS FIRST**: If the user specifies exact colors (like "pink floor", "blue walls", "white ceiling"), use those colors EXACTLY. Do not override them with mood guidance.
+    1. **HONOR USER MEMORY PREFERENCES FIRST**: If USER MEMORY shows user preferences (likes/dislikes), USE THOSE COLORS. For example, if user likes "soft sky blue" and "mint green", use those colors.
     
-    2. **Only apply mood guidance for unspecified elements**: If the user doesn't specify colors for certain room elements, then use mood-driven guidance for those elements only.
+    2. **HONOR EXPLICIT USER REQUESTS**: If the user specifies exact colors (like "pink floor", "blue walls"), use those colors EXACTLY.
     
-    3. **Use your tools to make the requested changes**: Don't just describe - actually call the tools to change colors.
+    3. **RESPECT AVOIDANCE PREFERENCES**: If USER MEMORY shows the user AVOIDS/DISLIKES certain colors, NEVER use those colors.
     
-    Examples:
-    - "add pink floor" → use change_floor_color with "#FFC0CB", leave walls/ceiling unchanged
-    - "blue walls" → use change_wall_color with "#87CEEB", leave ceiling/floor unchanged  
-    - "white ceiling" → use change_ceiling_color with "#FFFFFF", leave walls/floor unchanged
-    - "make it warmer" → apply warm palette to all elements (since no specific colors given)
+    4. **BE PROACTIVE**: For general requests like "redecorate", suggest specific colors based on their preferences with explanations like "Based on your love of warm colors, I'd suggest terracotta walls..."
+    
+    5. **Use your tools to make the requested changes**: Don't just describe - actually call the tools to change colors.
+    
+    6. **Only use mood guidance as last resort**: If no memory preferences and no explicit colors given, then use mood guidance.
+    
+    Examples of proactive responses:
+    - "redecorate my living room" → Look at preferences, suggest specific colors: "Based on your preference for warm colors, I'd suggest terracotta walls with cream accents"
+    - "pick colors I like" → Look at USER MEMORY for colors they PREFER, use those specific colors
+    - "colors based on my preference" → Check USER MEMORY for liked colors, apply those colors
     
     IMPORTANT: When user requests a specific color for a specific element, ONLY change that element. Do not change other elements unless explicitly requested.
     
@@ -865,6 +880,56 @@ def color_agent(state: AgentState) -> AgentState:
     
     final_reasoning = messages[-1].content if messages else "No reasoning available"
     
+    # Extract only the user-facing response portion, remove system prompt content
+    def extract_user_response(content):
+        """Extract user-facing response from LLM content, removing system prompts and instructions"""
+        if not content:
+            return "Applied color changes based on your preferences."
+        
+        # Split content by common separators and look for the actual response
+        lines = content.split('\n')
+        response_lines = []
+        
+        # Skip lines that look like system instructions or thinking
+        skip_patterns = [
+            "You are a color coordination expert",
+            "CRITICAL INSTRUCTIONS:",
+            "Current room colors:",
+            "Target mood:",
+            "Mood guidance:",
+            "Examples:",
+            "IMPORTANT:",
+            "Thought:",
+            "Action:",
+            "Action Input:",
+            "Observation:"
+        ]
+        
+        for line in lines:
+            line = line.strip()
+            if line and not any(skip in line for skip in skip_patterns):
+                # This looks like a user-facing response
+                response_lines.append(line)
+        
+        # If we found response lines, join them
+        if response_lines:
+            user_response = ' '.join(response_lines).strip()
+            # Additional cleanup
+            if user_response and len(user_response) > 10:
+                return user_response
+        
+        # Fallback: look for the last substantial line that's not system content
+        for line in reversed(lines):
+            line = line.strip()
+            if line and len(line) > 20 and not any(skip in line for skip in skip_patterns):
+                return line
+        
+        # Final fallback
+        return "Applied color changes based on your preferences."
+    
+    # Clean the final reasoning for user display
+    clean_final_message = extract_user_response(final_reasoning)
+    
     # Accumulate tool calls instead of overwriting
     existing_tool_calls = state.get("tool_calls", [])
     all_tool_calls = existing_tool_calls + tool_calls
@@ -876,13 +941,227 @@ def color_agent(state: AgentState) -> AgentState:
     return {
         **state,
         "agent_used": "color_agent", 
-        "reasoning": final_reasoning,
-        "final_message": f"Color Agent: {final_reasoning}",
+        "reasoning": final_reasoning,  # Keep full reasoning for debugging
+        "final_message": clean_final_message,  # Clean message for UI
         "tool_calls": all_tool_calls,
         "trace_events": all_trace,
         "latest_trace_events": agent_trace_events,
         "new_tool_calls": new_tool_calls,
     }
+
+
+import requests
+from firecrawl import Firecrawl
+firecrawl = Firecrawl(api_key=os.getenv("FIRECRAWL_API_KEY"))
+# --- Firecrawl Search Tools ---
+def firecrawl_search(query: str, max_results: int = 10, sources: List[str] = None) -> Dict[str, Any] | None:
+    """
+    Searches using Firecrawl v2 HTTP API to ensure consistent JSON shape.
+    Returns parsed JSON or None on error.
+    """
+    print(f"🔍 Searching for: {query}")
+    api_key = os.getenv('FIRECRAWL_API_KEY', '')
+    print(f"🔍 Using API key: {api_key[:10]}...")
+
+    try:
+        payload: Dict[str, Any] = {
+            "query": query,
+            "sources": sources if sources else ["images"],
+            "categories": [],
+            "limit": max_results,
+            "scrapeOptions": {
+                "onlyMainContent": True,
+                "maxAge": 172800000,
+                "parsers": ["pdf"],
+                "formats": []
+            }
+        }
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        print(f"🔍 POST https://api.firecrawl.dev/v2/search with payload: {payload}")
+        resp = requests.post("https://api.firecrawl.dev/v2/search", json=payload, headers=headers, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        print(f"🔍 Firecrawl v2 returned keys: {list(data.keys())}")
+        return data
+    except Exception as e:
+        print(f"Firecrawl search error: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+# --- Search Agent ---
+def search_agent(state: AgentState) -> AgentState:
+    print("🔎 --- Search Agent ---")
+    query = state.get('user_query', '')
+    
+    # Extract search query after @search
+    if '@search' in query:
+        search_query = query.split('@search', 1)[1].strip()
+        print(f"🔍 Search query: {search_query}")
+        
+        try:
+            # Always search for images only, restricted to approved domains
+            allowed_domains = [
+                'amazon.com', 'amazon.ca', 'amazon.co.uk', 'amazon.de', 'amazon.in',
+                'ikea.com',
+                'wayfair.com', 'wayfair.co.uk'
+            ]
+
+            site_filter = "(site:amazon.com OR site:ikea.com OR site:wayfair.com)"
+            restricted_query = f"{site_filter} {search_query}".strip()
+            print(f"🔍 Searching for images only on approved domains: {restricted_query}")
+            results = firecrawl_search(restricted_query, max_results=10, sources=['images'])
+            
+            print(f" Raw Firecrawl results: {results}")
+            
+            # Convert Firecrawl v2 JSON image results to expected format
+            formatted_results = []
+            if results and isinstance(results, dict):
+                images = []
+                if 'data' in results and isinstance(results['data'], dict) and 'images' in results['data']:
+                    images = results['data'].get('images') or []
+                elif 'images' in results:
+                    images = results.get('images') or []
+
+                print(f"🔍 Found {len(images)} image results")
+                for item in images:
+                    title = item.get('title') or 'Product'
+                    url = item.get('url') or ''
+                    image_url = item.get('imageUrl') or None
+                    description = item.get('description') or ''
+                    formatted_results.append({
+                        "title": title,
+                        "url": url,
+                        "content": description,
+                        "score": 0.8,
+                        "image": image_url,
+                    })
+                # Post-filter by allowlist to be safe
+                def is_allowed(u: str) -> bool:
+                    try:
+                        from urllib.parse import urlparse
+                        host = urlparse(u).hostname or ''
+                        return any(d in host for d in allowed_domains)
+                    except Exception:
+                        return False
+
+                before = len(formatted_results)
+                formatted_results = [r for r in formatted_results if is_allowed(r.get('url', ''))]
+                print(f"🔍 Domain allowlist filtered {before} -> {len(formatted_results)} results")
+            else:
+                print(f"🔍 No image results found. Results type: {type(results)}")
+            
+            final_msg = f"🔍 **Search Results for '{search_query}'**\n\nFound {len(formatted_results)} results. Pick one to add to your room, or refine your search."
+            agent_trace_events = [{"type": "thought", "agent": "search_agent", "content": final_msg}]
+            return {
+                **state,
+                "agent_used": "search_agent",
+                "final_message": final_msg,
+                "reasoning": final_msg,
+                "search_query": search_query,
+                "search_results": formatted_results,
+                "latest_trace_events": agent_trace_events,
+                "new_tool_calls": [],
+            }
+        except Exception as e:
+            print(f"Search agent error: {e}")
+            final_msg = f"❌ Sorry, I encountered an error while searching for '{search_query}'. Please try again."
+            agent_trace_events = [{"type": "thought", "agent": "search_agent", "content": final_msg}]
+            return {
+                **state,
+                "agent_used": "search_agent",
+                "final_message": final_msg,
+                "reasoning": final_msg,
+                "search_query": search_query,
+                "search_results": [],
+                "latest_trace_events": agent_trace_events,
+                "new_tool_calls": [],
+            }
+    else:
+        # No @search keyword found
+        final_msg = "No search query found. Use '@search' followed by what you want to find."
+        agent_trace_events = [{"type": "thought", "agent": "search_agent", "content": final_msg}]
+        return {
+            **state,
+            "agent_used": "search_agent",
+            "final_message": final_msg,
+            "reasoning": final_msg,
+            "search_query": "",
+            "search_results": [],
+            "latest_trace_events": agent_trace_events,
+            "new_tool_calls": [],
+        }
+
+
+# --- Conversation Agent ---
+def conversation_agent(state: AgentState) -> AgentState:
+    """
+    Handles informational queries and questions without making changes to the room.
+    Provides conversational responses using memory context and room information.
+    """
+    print("💬 --- Conversation Agent ---")
+    
+    user_query = state['user_query']
+    room_info = state['room_state']
+    memory_context = state.get('memory_context', '')
+    
+    # Create context-aware prompt for conversation
+    context = f"""
+    You are an expert interior design assistant. The user is asking a question about their room design.
+    
+    Current room information:
+    - Dimensions: {room_info.get('width', 12)}ft x {room_info.get('length', 12)}ft x {room_info.get('height', 8)}ft
+    - Floor color: {room_info.get('floorColor', '#e3e3e3')}
+    - Ceiling color: {room_info.get('ceilingColor', '#e3e3e3')}
+    - Wall colors: Front({room_info.get('wallFrontColor', '#e3e3e3')}), Back({room_info.get('wallBackColor', '#e3e3e3')}), Left({room_info.get('wallLeftColor', '#e3e3e3')}), Right({room_info.get('wallRightColor', '#e3e3e3')})
+    - Furniture: {len(room_info.get('blocks', []))} items
+    
+    {memory_context}
+    
+    User Question: "{user_query}"
+    
+    Provide a helpful, conversational response. If the user asks about their preferences and you have memory context, use that information to give a personalized answer. If asking about room details, reference the current room information.
+    
+    Keep your response natural and helpful, like you're talking to a friend about their interior design.
+    """
+    
+    try:
+        print(f"💬 Sending context to LLM...")
+        llm_response = llm.invoke(context)
+        response_content = llm_response.content.strip()
+        
+        print(f"💬 LLM Response length: {len(response_content)}")
+        print(f"💬 Raw response: '{response_content}'")
+        
+        if not response_content:
+            response_content = "I understand you're asking about your preferences. Let me help you with that based on what I know about your design choices."
+        
+        # Update state with conversational response
+        updated_state = {
+            **state,
+            "agent_used": "conversation_agent",
+            "reasoning": f"Provided conversational response to user query: {user_query}",
+            "final_message": response_content,
+            "tool_calls": [],  # No tool calls for conversation
+            "new_tool_calls": []
+        }
+        
+        print(f"💬 Final message set to: {response_content[:100]}...")
+        return updated_state
+        
+    except Exception as e:
+        print(f"💬 Error in conversation agent: {e}")
+        return {
+            **state,
+            "agent_used": "conversation_agent",
+            "reasoning": f"Error processing query: {str(e)}",
+            "final_message": "I'm sorry, I had trouble processing your question. Could you try asking again?",
+            "tool_calls": [],
+            "new_tool_calls": []
+        }
 
 # --- Intersection Agent ---
 def intersection_agent(state: AgentState) -> AgentState:
@@ -1017,12 +1296,41 @@ def intersection_agent(state: AgentState) -> AgentState:
 def router_agent(state: AgentState) -> AgentState:
     """
     Analyzes user input using LLM to determine which agents are needed and execution strategy.
+    Includes proactive intelligence by analyzing user preferences and room context.
     """
     print("🧠 --- Intelligent Router Agent ---")
     
     user_query = state['user_query']
     # attach simple intent for downstream prompts
     state['user_intent'] = analyze_user_intent(user_query)
+    
+    # Add memory-aware proactive context
+    user_id = state.get('user_id') or state.get('userId')
+    if user_id:
+        try:
+            from memory.memory_retrieval import MemoryRetrieval
+            memory_context = MemoryRetrieval.get_memory_aware_context(user_id, user_query)
+            state['memory_context'] = memory_context
+            
+            # Generate proactive intelligence context for agents
+            if memory_context:
+                room_info = state.get('room_state', {})
+                furniture_count = len(room_info.get('blocks', []))
+                proactive_context = f"""
+PROACTIVE INTELLIGENCE: The user has established preferences in memory. When processing their request:
+1. Look beyond their literal request - suggest complementary improvements based on their preferences
+2. If they make a general request like 'redecorate', be proactive with specific suggestions they'll love
+3. Current room has {furniture_count} furniture items - consider what's missing or could be improved
+4. Be conversational: 'Based on your love of [preference], I'd suggest...'
+
+{memory_context}
+"""
+                state['proactive_context'] = proactive_context
+                print(f"🧠 Added proactive intelligence context based on user preferences")
+        except Exception as e:
+            print(f"⚠️ Memory retrieval failed: {e}")
+            state['memory_context'] = ''
+            state['proactive_context'] = ''
     
     # Use LLM to analyze the query and determine agent requirements
     routing_prompt = f"""You are a routing system for interior design agents. Analyze the query and respond with ONLY valid JSON.
@@ -1032,6 +1340,8 @@ User Query: "{user_query}"
 Available Agents:
 - furniture_agent: furniture placement, selection, arrangement, moving, removing
 - color_agent: wall colors, ceiling colors, floor colors, color schemes, palettes
+- search_agent: finding furniture items online when the user asks to search for a sp
+- conversation_agent: answering questions, providing information, discussing preferences without making changes
 - intersection_agent: checks for furniture collisions/intersections (automatically added after furniture changes)
 
 Respond with valid JSON only:
@@ -1042,6 +1352,7 @@ IMPORTANT: Do NOT include intersection_agent in your response - it will be autom
 Examples:
 {{"agents_needed": ["furniture_agent"], "execution_strategy": "sequential", "reasoning": "Only furniture placement needed", "complexity": "simple"}}
 {{"agents_needed": ["color_agent"], "execution_strategy": "sequential", "reasoning": "Only color change needed", "complexity": "simple"}}  
+{{"agents_needed": ["conversation_agent"], "execution_strategy": "sequential", "reasoning": "User asking a question that needs conversational response", "complexity": "simple"}}
 {{"agents_needed": ["furniture_agent", "color_agent"], "execution_strategy": "sequential", "reasoning": "Need furniture setup then color coordination", "complexity": "complex"}}"""
     
     try:
@@ -1080,6 +1391,25 @@ Examples:
         print(f"   Strategy: {state['execution_strategy']}")
         print(f"   Reasoning: {state['routing_reasoning']}")
         print(f"   Complexity: {state['complexity']}")
+
+        # Record ROUTED_TO edges in memory (best-effort)
+        try:
+            from memory import MemoryActionOps
+            user_id = state.get('user_id') or state.get('userId')
+            session_id = state.get('session_id')
+            if user_id:
+                for agent_name in state.get('agents_needed', []):
+                    if agent_name in ['furniture_agent', 'color_agent', 'conversation_agent', 'intersection_agent', 'search_agent']:
+                        MemoryActionOps.record_routed_to(
+                            user_id=user_id,
+                            agent_name=agent_name,
+                            reason=state.get('routing_reasoning', ''),
+                            confidence=None,
+                            complexity=state.get('complexity'),
+                            session_id=session_id,
+                        )
+        except Exception as _e:
+            print(f"⚠️ ROUTED_TO write failed: {_e}")
         
     except Exception as e:
         print(f"⚠️ LLM routing failed, using fallback: {e}")
@@ -1090,8 +1420,12 @@ Examples:
         
         has_furniture = any(keyword in user_query_lower for keyword in furniture_keywords)
         has_color = any(keyword in user_query_lower for keyword in color_keywords)
+        has_search = '@search' in user_query  # Check for @search keyword
         
-        if has_furniture and has_color:
+        if has_search:
+            state['agents_needed'] = ['search_agent']
+            state['execution_strategy'] = 'sequential'
+        elif has_furniture and has_color:
             state['agents_needed'] = ['furniture_agent', 'color_agent']
             state['execution_strategy'] = 'sequential'
         elif has_furniture:
@@ -1208,6 +1542,23 @@ def complete_agent_execution(state: AgentState) -> AgentState:
             combined_message = "\n\n".join(agent_summaries)
             state['final_message'] = combined_message
             print(f"🎯 Combined final message from all agents")
+
+            # Write a SessionSummary node
+            try:
+                from memory import MemoryActionOps
+                session_id = state.get('session_id')
+                user_id = state.get('user_id') or state.get('userId')
+                agents_used = state.get('agents_completed', [])
+                num_tool_calls = len(state.get('tool_calls', []))
+                MemoryActionOps.record_session_summary(
+                    session_id=session_id,
+                    user_id=user_id,
+                    agents_used=agents_used,
+                    num_tool_calls=num_tool_calls,
+                    final_message=combined_message,
+                )
+            except Exception as _e:
+                print(f"⚠️ SESSION_SUMMARY write failed: {_e}")
     
     return state
 
@@ -1219,6 +1570,8 @@ workflow.add_node("router_agent", router_agent)
 workflow.add_node("agent_coordinator", agent_coordinator)
 workflow.add_node("furniture_agent", furniture_agent)  
 workflow.add_node("color_agent", color_agent)
+workflow.add_node("conversation_agent", conversation_agent)
+workflow.add_node("search_agent", search_agent)
 workflow.add_node("complete_agent", complete_agent_execution)
 
 # Add edges
@@ -1229,18 +1582,24 @@ workflow.add_conditional_edges(
     execute_next_agent,
     {
         "furniture_agent": "furniture_agent",
-        "color_agent": "color_agent", 
+        "color_agent": "color_agent",
+        "conversation_agent": "conversation_agent",
+        "search_agent": "search_agent",
         "__end__": END
     }
 )
 workflow.add_edge("furniture_agent", "complete_agent")
 workflow.add_edge("color_agent", "complete_agent")
+workflow.add_edge("conversation_agent", "complete_agent")
+workflow.add_edge("search_agent", "complete_agent")
 workflow.add_conditional_edges(
     "complete_agent",
     execute_next_agent,
     {
         "furniture_agent": "furniture_agent",
         "color_agent": "color_agent",
+        "conversation_agent": "conversation_agent",
+        "search_agent": "search_agent",
         "__end__": END
     }
 )
@@ -1425,13 +1784,17 @@ def stream_workflow(initial_state: AgentState):
             break
 
         yield {"type": "agent_start", "agent": next_step}
-
+        
         if next_step == "furniture_agent":
             result_state = furniture_agent(state)
         elif next_step == "color_agent":
             result_state = color_agent(state)
+        elif next_step == "conversation_agent":
+            result_state = conversation_agent(state)
         elif next_step == "intersection_agent":
             result_state = intersection_agent(state)
+        elif next_step == "search_agent":
+            result_state = search_agent(state)
         else:
             result_state = state
 
@@ -1459,6 +1822,7 @@ def stream_workflow(initial_state: AgentState):
         allowed_tools_by_agent = {
             "furniture_agent": {"add_furniture", "move_furniture", "remove_furniture", "list_available_furniture"},
             "color_agent": {"change_wall_color", "change_ceiling_color", "change_floor_color", "analyze_room_colors", "suggest_color_palette"},
+            "search_agent": set(),
         }
         allowed = allowed_tools_by_agent.get(next_step, set())
         # During collision resolution, restrict furniture tools to movement/removal only (avoid duplicate adds)
@@ -1478,6 +1842,27 @@ def stream_workflow(initial_state: AgentState):
             base_room = result_state.get("room_state") or state.get("room_state") or {}
             updated_room = apply_actions_to_room_state(base_room, actions)
             result_state["room_state"] = updated_room
+
+            # Write action-level memory edges (best-effort)
+            try:
+                from memory import MemoryActionOps
+                user_id = result_state.get('user_id') or state.get('user_id')
+                session_id = result_state.get('session_id') or state.get('session_id')
+                if user_id and session_id:
+                    for a in actions:
+                        kind = a.get('action')
+                        target = a.get('target')
+                        val = a.get('value', {})
+                        if kind == 'add_object':
+                            MemoryActionOps.record_placed(user_id, session_id, target, val.get('x',0), val.get('y',0), val.get('z',0), val.get('width',1), val.get('height',1), val.get('depth',1), val.get('color'))
+                        elif kind == 'move_object':
+                            MemoryActionOps.record_moved(user_id, session_id, target, {k: val.get(k) for k in ['x','y','z']})
+                        elif kind == 'remove_object':
+                            MemoryActionOps.record_removed(user_id, session_id, target)
+                        elif kind == 'change_color':
+                            MemoryActionOps.record_recolored(user_id, session_id, a.get('target'), a.get('value'))
+            except Exception as _e:
+                print(f"⚠️ Action memory write failed: {_e}")
 
         # Conditional loop: if intersection_agent found collisions, schedule a resolution loop via furniture_agent
         if next_step == "intersection_agent":
@@ -1499,8 +1884,32 @@ def stream_workflow(initial_state: AgentState):
                 else:
                     yield {"type": "thought", "agent": "intersection_agent", "content": "Max collision resolution passes reached. Proceeding."}
 
+      
+        # Record CHANGED edge from the agent with a terse summary
+        try:
+            from memory import MemoryActionOps
+            session_id = result_state.get('session_id') or state.get('session_id')
+            agent_name_for_edge = next_step
+            if agent_name_for_edge and session_id:
+                summary_text = result_state.get('final_message', '') or result_state.get('reasoning', '')
+                # keep it short to avoid noisy graph
+                summary_text = (summary_text[:240] + '…') if summary_text and len(summary_text) > 240 else summary_text
+                MemoryActionOps.record_changed(agent_name_for_edge, session_id, summary_text)
+        except Exception as _e:
+            print(f"⚠️ CHANGED write failed: {_e}")
+
         state = complete_agent_execution(result_state)
         yield {"type": "agent_complete", "agent": next_step}
+
+        # Stream search results as a dedicated event if present
+        if next_step == "search_agent" and result_state.get("search_results") is not None:
+            yield {
+                "type": "search_results",
+                "agent": "search_agent",
+                "query": result_state.get("search_query", state.get("user_query", "")),
+                "message": state.get("final_message", "Search completed"),
+                "items": result_state.get("search_results", []),
+            }
 
     # Final summary
     yield {

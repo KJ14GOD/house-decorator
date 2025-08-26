@@ -45,7 +45,7 @@ def load_clip_model():
         model, preprocess = clip.load("ViT-B/32", device=device)
         print("CLIP model loaded successfully!")
 
-@app.on_event("startup")
+# @app.on_event("startup")
 async def startup_event():
     """Load CLIP model when the server starts"""
     load_clip_model()
@@ -59,10 +59,21 @@ def generate_3d_model_with_meshy(image: Image.Image) -> dict:
     Generate 3D model data based on the room image using Meshy.ai API.
     """
     try:
-        # Convert image to base64
+        # Convert image to base64 and persist a debug copy to disk
         buffered = io.BytesIO()
         image.save(buffered, format="PNG")
-        img_str = base64.b64encode(buffered.getvalue()).decode()
+        img_bytes = buffered.getvalue()
+        img_str = base64.b64encode(img_bytes).decode()
+
+        # Save the exact image being sent to Meshy for debugging/inspection
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        debug_path = f"meshy_input_{ts}.png"
+        try:
+            with open(debug_path, "wb") as f:
+                f.write(img_bytes)
+            print(f"[Meshy] Saved input image -> {debug_path} ({len(img_bytes)} bytes)")
+        except Exception as _e:
+            print(f"[Meshy] Failed to save debug image: {_e}")
 
         headers = {
             "Authorization": f"Bearer {MESHY_API_KEY}"
@@ -71,24 +82,30 @@ def generate_3d_model_with_meshy(image: Image.Image) -> dict:
             "image_url": f"data:image/png;base64,{img_str}",
             "enable_original_uv": True,
         }
-        response = requests.post("https://api.meshy.ai/v1/image-to-3d", headers=headers, json=payload)
+        response = requests.post("https://api.meshy.ai/openapi/v1/image-to-3d", headers=headers, json=payload)
         response.raise_for_status()
         task_id = response.json()["result"]
 
         # Poll for task completion
         while True:
-            response = requests.get(f"https://api.meshy.ai/v1/image-to-3d/{task_id}", headers=headers)
+            response = requests.get(f"https://api.meshy.ai/openapi/v1/image-to-3d/{task_id}", headers=headers)
             response.raise_for_status()
             data = response.json()
-            if data["status"] == "SUCCEEDED":
-                return {"model_url": data["model_url"]}
-            elif data["status"] == "FAILED":
-                raise Exception("Meshy.ai task failed")
+            status = data.get("status")
+            print(f"[Meshy] Task {task_id} status: {status}")
+            if status == "SUCCEEDED":
+                return {"model_url": data.get("model_url"), "input_image_path": debug_path}
+            elif status == "FAILED":
+                # include error details from Meshy if available
+                error_msg = data.get("task_error", {}).get("message", "Unknown error")
+                print(f"[Meshy] Task failed with error: {error_msg}")
+                return {"error": f"Meshy task failed: {error_msg}", "input_image_path": debug_path, "full_error": data}
             time.sleep(5)
             
     except Exception as e:
         print(f"Error generating 3D model with Meshy.ai: {str(e)}")
-        return {"error": str(e)}
+        # best-effort path; may not exist if earlier failure
+        return {"error": str(e), "input_image_path": locals().get("debug_path")}
 
 # Helper functions for color normalization
 import colorsys

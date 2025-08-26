@@ -1,17 +1,131 @@
 "use client";
-import { useState, useRef, useEffect, useCallback, Suspense } from "react";
+import { useState, useRef, useEffect, useCallback, Suspense, forwardRef, useImperativeHandle } from "react";
+import type { FormEvent, Ref, KeyboardEvent as ReactKeyboardEvent } from 'react';
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Canvas, useThree, useFrame } from "@react-three/fiber";
 import { OrbitControls, Edges, PointerLockControls, Text, useGLTF, PerspectiveCamera, Environment } from "@react-three/drei";
 import * as THREE from 'three';
-import { ChevronUp, ChevronDown, Pencil, RotateCcw, RotateCw } from 'lucide-react';
+import {GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { ChevronUp, ChevronDown, Pencil, RotateCcw, RotateCw, Sofa, DoorOpen, Bed, RectangleHorizontal, Armchair, Package, Archive, Utensils, ChefHat, Laptop, BookOpen, Users, ShoppingBag, Send } from 'lucide-react';
 import { db } from "@/lib/firebase/firebase";
 import { doc, updateDoc, getDoc, arrayUnion, arrayRemove } from "firebase/firestore";
 import { TransformControls } from "@react-three/drei";
 import ShareModal, { ShareUser, LinkSharing } from "@/components/ShareModal";
 import { useAuth } from '@/context/AuthContext';
 import MultiAgentProgress from '@/components/MultiAgentProgress';
+import { modelDirection } from "three/src/nodes/TSL.js";
+import { MessageStorage } from '@/lib/messages/messageStorage';
+
+// Lightweight, isolated chat input to avoid page re-render on each keystroke
+const ChatInputBar = forwardRef(function ChatInputBar(
+  {
+    isLoading,
+    multiAgentMode,
+    onSubmit,
+  }: {
+    isLoading: boolean;
+    multiAgentMode: boolean;
+    onSubmit: (text: string) => void;
+  },
+  ref: Ref<{ setValue: (v: string) => void; focus: () => void }>
+) {
+  const [localValue, setLocalValue] = useState('');
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useImperativeHandle(ref, () => ({
+    setValue: (v: string) => setLocalValue(v ?? ''),
+    focus: () => textareaRef.current?.focus(),
+  }), []);
+
+  const handleKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      const text = localValue.trim();
+      if (text.length === 0 || isLoading) return;
+      onSubmit(text);
+      setLocalValue('');
+    }
+  };
+
+  const handleClick = () => {
+    const text = localValue.trim();
+    if (text.length === 0 || isLoading) return;
+    onSubmit(text);
+    setLocalValue('');
+  };
+
+  return (
+    <div style={{ position: 'relative', display: 'flex', alignItems: 'flex-end', gap: '8px' }}>
+      <div style={{ flex: 1, position: 'relative' }}>
+        <textarea
+          ref={textareaRef}
+          value={localValue}
+          onChange={e => setLocalValue(e.target.value)}
+          placeholder={multiAgentMode
+            ? "Ask complex design questions - I'll use multiple AI agents to create your perfect room..."
+            : "Ask about your room design..."}
+          style={{
+            width: '100%',
+            minHeight: '48px',
+            maxHeight: '150px',
+            padding: '12px 16px',
+            borderRadius: '12px',
+            border: '1.5px solid #e2e8f0',
+            fontSize: '14px',
+            outline: 'none',
+            background: '#ffffff',
+            color: '#1e293b',
+            resize: 'none',
+            fontFamily: 'inherit',
+            lineHeight: '1.5',
+            transition: 'all 0.2s ease',
+            boxSizing: 'border-box'
+          }}
+          onFocus={e => {
+            e.currentTarget.style.borderColor = '#fad600';
+            e.currentTarget.style.boxShadow = '0 0 0 3px rgba(250, 214, 0, 0.1)';
+          }}
+          onBlur={e => {
+            e.currentTarget.style.borderColor = '#e2e8f0';
+            e.currentTarget.style.boxShadow = 'none';
+          }}
+          disabled={isLoading}
+          onKeyDown={handleKeyDown}
+        />
+      </div>
+
+      <button
+        type="button"
+        disabled={isLoading || localValue.trim().length === 0}
+        onClick={handleClick}
+        style={{
+          width: '48px',
+          height: '48px',
+          borderRadius: '12px',
+          border: 'none',
+          background: isLoading || localValue.trim().length === 0 ? '#e2e8f0' : '#fad600',
+          color: isLoading || localValue.trim().length === 0 ? '#94a3b8' : '#18181b',
+          cursor: isLoading || localValue.trim().length === 0 ? 'not-allowed' : 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          transition: 'all 0.2s ease',
+          opacity: isLoading || localValue.trim().length === 0 ? 0.5 : 1,
+          transform: isLoading || localValue.trim().length === 0 ? 'scale(0.95)' : 'scale(1)',
+          boxShadow: isLoading || localValue.trim().length === 0 ? 'none' : '0 2px 8px rgba(250, 214, 0, 0.2)'
+        }}
+      >
+        {isLoading ? (
+          <div style={{ fontSize: '18px' }}>⋯</div>
+        ) : (
+          <Send size={20} />
+        )}
+      </button>
+    </div>
+  );
+});
+
 
 // Helper function to create subtle procedural textures
 const createProceduralTexture = (type: 'wall' | 'floor' | 'ceiling') => {
@@ -121,8 +235,185 @@ function GLBModel({ url }: { url: string }) {
   );
 }
 
-function RoomBox({ width, length, height, floorColor, ceilingColor, wallFrontColor, wallBackColor, wallLeftColor, wallRightColor, hideCeiling = false, hideFloor = false, blocks = [], previewBlock = null, meshyModelUrl = null }: {
+// Optimized library preview - only show 3D when hovering
+function LibraryItemPreview({ modelPath, isHovered }: { modelPath: string; isHovered: boolean }) {
+  const meshRef = useRef<THREE.Group>(null);
+  
+  // Auto-rotation only when hovered (performance optimization)
+  useFrame((state, delta) => {
+    if (meshRef.current && isHovered) {
+      meshRef.current.rotation.y += delta * 0.5;
+    }
+  });
+
+  // Only load model when hovered to reduce initial load
+  if (!isHovered) {
+    return null;
+  }
+
+  try {
+    const { scene } = useGLTF(modelPath);
+    const clonedScene = scene.clone();
+    
+    // Calculate bounding box to center and scale the model
+    const box = new THREE.Box3().setFromObject(clonedScene);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    
+    // Make the model larger - scale to fit better in preview
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const scale = 3.2 / maxDim;
+    
+    return (
+      <group ref={meshRef} rotation={[-0.15, 0, 0]}>
+        <primitive
+          object={clonedScene}
+          position={[-center.x * scale, -center.y * scale, -center.z * scale]}
+          scale={[scale, scale, scale]}
+        />
+      </group>
+    );
+  } catch (error) {
+    return null;
+  }
+}
+
+function GLBBlockModel({ block, scale, roomWidth, roomLength, onBlockClick }: {
+  block: any;
+  scale: number;
+  roomWidth: number;
+  roomLength: number;
+  onBlockClick?: (blockId: string) => void;
+}) {
+  console.log('Loading GLB model:', block.modelPath, 'for block:', block.name);
+  const gltfResult = useGLTF(block.modelPath);
+  console.log('GLTF result:', gltfResult);
+  const scene = (gltfResult as any).scene as THREE.Group;
+  console.log('GLB model loaded successfully:', block.modelPath);
+  
+  // Clone the scene to avoid reusing the same instance
+  const clonedScene = scene.clone();
+  
+  // Calculate original model bounding box
+  const originalBox = new THREE.Box3().setFromObject(clonedScene);
+  const modelWidth = originalBox.max.x - originalBox.min.x;
+  const modelHeight = originalBox.max.y - originalBox.min.y;
+  const modelDepth = originalBox.max.z - originalBox.min.z;
+  
+  // Calculate scale to fit block dimensions
+  const scaleX = (block.width * scale) / modelWidth;
+  const scaleY = (block.height * scale) / modelHeight;
+  const scaleZ = (block.depth * scale) / modelDepth;
+  
+  // Center the model's origin
+  const modelCenterX = (originalBox.max.x + originalBox.min.x) / 2;
+  const modelCenterY = (originalBox.max.y + originalBox.min.y) / 2;
+  const modelCenterZ = (originalBox.max.z + originalBox.min.z) / 2;
+  
+  // Calculate the final position to match box geometry positioning
+  const glbPosition = [
+    (block.x + block.width/2) * scale - roomWidth/2,
+    (block.y + block.height/2) * scale,
+    (block.z + block.depth/2) * scale - roomLength/2
+  ] as [number, number, number];
+  
+  const handleClick = (e: any) => {
+    e.stopPropagation();
+    if (onBlockClick) {
+      onBlockClick(block.id);
+    }
+  };
+
+  return (
+    <group 
+      position={glbPosition}
+      rotation={[0, block.rotation || 0, 0]}
+      onClick={handleClick}
+      onPointerOver={(e) => {
+        e.stopPropagation();
+        document.body.style.cursor = 'pointer';
+      }}
+      onPointerOut={(e) => {
+        e.stopPropagation();
+        document.body.style.cursor = 'auto';
+      }}
+    >
+      <primitive
+        object={clonedScene}
+        position={[-modelCenterX * scaleX, -modelCenterY * scaleY, -modelCenterZ * scaleZ]}
+        scale={[scaleX, scaleY, scaleZ]}
+        castShadow
+        receiveShadow
+      />
+    </group>
+  );
+}
+
+function BlockRenderer({ block, scale, roomWidth, roomLength, onBlockClick }: { 
+  block: any; 
+  scale: number; 
+  roomWidth: number; 
+  roomLength: number; 
+  onBlockClick?: (blockId: string) => void;
+}) {
+  // Position for box geometry (centered)
+  const boxPosition = [
+    (block.x + block.width/2) * scale - roomWidth/2,
+    (block.y + block.height/2) * scale,
+    (block.z + block.depth/2) * scale - roomLength/2
+  ] as [number, number, number];
+
+  const handleClick = (e: any) => {
+    e.stopPropagation();
+    if (onBlockClick) {
+      onBlockClick(block.id);
+    }
+  };
+
+  if (block.modelPath) {
+    return (
+      <GLBBlockModel 
+        block={block}
+        scale={scale}
+        roomWidth={roomWidth}
+        roomLength={roomLength}
+        onBlockClick={onBlockClick}
+      />
+    );
+  }
+
+  // Default box geometry fallback
+  return (
+    <mesh 
+      position={boxPosition} 
+      rotation={[0, block.rotation || 0, 0]} 
+      castShadow 
+      receiveShadow
+      onClick={handleClick}
+      onPointerOver={(e) => {
+        e.stopPropagation();
+        document.body.style.cursor = 'pointer';
+      }}
+      onPointerOut={(e) => {
+        e.stopPropagation();
+        document.body.style.cursor = 'auto';
+      }}
+    >
+      <boxGeometry args={[block.width * scale, block.height * scale, block.depth * scale]} />
+      <meshStandardMaterial 
+        color={block.color} 
+        roughness={0.4}
+        metalness={0.1}
+        opacity={0.95}
+        transparent
+      />
+    </mesh>
+  );
+}
+
+function RoomBox({ width, length, height, floorColor, ceilingColor, wallFrontColor, wallBackColor, wallLeftColor, wallRightColor, hideCeiling = false, hideFloor = false, blocks = [], previewBlock = null, meshyModelUrl = null, onBlockClick }: {
   meshyModelUrl?: string | null;
+  onBlockClick?: (blockId: string) => void;
   width: number;
   length: number;
   height: number;
@@ -418,22 +709,40 @@ function RoomBox({ width, length, height, floorColor, ceilingColor, wallFrontCol
       >
         Wall
       </Text>
-      {/* Render all blocks as colored boxes inside the room */}
+      {/* Render all blocks as colored boxes or GLB models inside the room */}
       {blocks.map((block, i) => (
-        <mesh key={`block-${i}`} position={[
-          (block.x + block.width/2) * scale - w/2,
-          (block.y + block.height/2) * scale,
-          (block.z + block.depth/2) * scale - l/2
-        ]} rotation={[0, block.rotation || 0, 0]} castShadow receiveShadow>
-          <boxGeometry args={[block.width * scale, block.height * scale, block.depth * scale]} />
-          <meshStandardMaterial 
-            color={block.color} 
-            roughness={0.4}
-            metalness={0.1}
-            opacity={0.95}
-            transparent
+        <Suspense 
+          key={`block-${i}`} 
+          fallback={
+            <mesh 
+              position={[
+                (block.x + block.width/2) * scale - w/2,
+                (block.y + block.height/2) * scale,
+                (block.z + block.depth/2) * scale - l/2
+              ]} 
+              rotation={[0, block.rotation || 0, 0]} 
+              castShadow 
+              receiveShadow
+            >
+              <boxGeometry args={[block.width * scale, block.height * scale, block.depth * scale]} />
+              <meshStandardMaterial 
+                color={block.color} 
+                roughness={0.4}
+                metalness={0.1}
+                opacity={0.95}
+                transparent
+              />
+            </mesh>
+          }
+        >
+          <BlockRenderer 
+            block={block}
+            scale={scale}
+            roomWidth={w}
+            roomLength={l}
+            onBlockClick={onBlockClick}
           />
-        </mesh>
+        </Suspense>
       ))}
       
       {/* Render preview block if in preview mode */}
@@ -586,6 +895,11 @@ export default function ModelPage() {
   const [isEditingName, setIsEditingName] = useState(false);
   const [userPermission, setUserPermission] = useState<'edit' | 'view'>('edit');
   const [isOwner, setIsOwner] = useState(true); // Default to true until we determine otherwise
+  
+  // Library state
+  const [librarySearchTerm, setLibrarySearchTerm] = useState('');
+  const [libraryCategory, setLibraryCategory] = useState('All');
+  const [librarySortBy, setLibrarySortBy] = useState('Name');
 
   // Load meshyModelUrl from localStorage on mount
   useEffect(() => {
@@ -625,6 +939,7 @@ export default function ModelPage() {
     depth: number,
     color: string,
     rotation: number,
+    modelPath?: string,
     created: Date
   }>>([]);
   const [blockConfig, setBlockConfig] = useState({
@@ -634,6 +949,69 @@ export default function ModelPage() {
   const [rotateMode, setRotateMode] = useState(false);
 
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
+  
+  // Ref for the horizontal scroll container
+  const horizontalScrollRef = useRef<HTMLDivElement>(null);
+  
+  // Function to scroll to selected object type
+  const scrollToSelectedObject = (blockId: string) => {
+    if (!blockId) return;
+    
+    const selectedBlock = blocks.find(b => b.id === blockId);
+    if (!selectedBlock) return;
+    
+    const uniqueNames = [...new Set(blocks.map(block => block.name))];
+    const selectedIndex = uniqueNames.findIndex(name => name === selectedBlock.name);
+    
+    if (selectedIndex === -1) return;
+    
+    // Retry function to wait for the objects page to render
+    const tryScroll = (attempts = 0) => {
+      if (attempts > 20) return; // Give up after 2 seconds (20 * 100ms)
+      
+      if (!horizontalScrollRef.current) {
+        // Container not ready yet, try again in 100ms
+        setTimeout(() => tryScroll(attempts + 1), 100);
+        return;
+      }
+      
+      const buttons = horizontalScrollRef.current.querySelectorAll('button');
+      if (buttons.length === 0) {
+        // Buttons not rendered yet, try again
+        setTimeout(() => tryScroll(attempts + 1), 100);
+        return;
+      }
+      
+      const selectedButton = buttons[selectedIndex] as HTMLElement;
+      
+      if (selectedButton) {
+        const containerWidth = horizontalScrollRef.current.offsetWidth;
+        const buttonLeft = selectedButton.offsetLeft;
+        const buttonWidth = selectedButton.offsetWidth;
+        const scrollPosition = buttonLeft - (containerWidth / 2) + (buttonWidth / 2);
+        
+        horizontalScrollRef.current.scrollTo({
+          left: Math.max(0, scrollPosition),
+          behavior: 'smooth'
+        });
+      }
+    };
+    
+    // Start trying to scroll after a short delay
+    setTimeout(() => tryScroll(), 150);
+  };
+
+  // Auto-select first object when blocks change
+  useEffect(() => {
+    if (blocks.length > 0 && !selectedBlockId) {
+      setSelectedBlockId(blocks[0].id);
+    } else if (blocks.length === 0) {
+      setSelectedBlockId(null);
+    } else if (selectedBlockId && !blocks.find(b => b.id === selectedBlockId)) {
+      // If selected block was deleted, select first available
+      setSelectedBlockId(blocks[0].id);
+    }
+  }, [blocks, selectedBlockId]);
 
   const [rulerMode, setRulerMode] = useState(false);
   const [rulers, setRulers] = useState<Array<[THREE.Vector3, THREE.Vector3]>>([]);
@@ -674,6 +1052,8 @@ export default function ModelPage() {
   const [redoStack, setRedoStack] = useState<RoomSnapshot[]>([]);
   const [lastAction, setLastAction] = useState<string>("");
 
+  const isRenameAction = useCallback((action: string) => /\brename(d)?\b/i.test(action), []);
+
   // Create a snapshot of the current room state
   const createSnapshot = useCallback((actionDescription: string): RoomSnapshot => {
     return {
@@ -706,6 +1086,10 @@ export default function ModelPage() {
 
   // Save current state to undo stack
   const saveStateToHistory = useCallback((actionDescription: string) => {
+    // Never track rename actions in history
+    if (isRenameAction(actionDescription)) {
+      return;
+    }
     const snapshot = createSnapshot(actionDescription);
     setUndoStack(prev => {
       const newStack = [...prev, snapshot];
@@ -715,7 +1099,7 @@ export default function ModelPage() {
     // Clear redo stack when new action is performed
     setRedoStack([]);
     setLastAction(actionDescription);
-  }, [createSnapshot]);
+  }, [createSnapshot, isRenameAction]);
 
   // Restore state from snapshot
   const restoreFromSnapshot = useCallback((snapshot: RoomSnapshot) => {
@@ -729,40 +1113,61 @@ export default function ModelPage() {
     setWallBackColor(snapshot.wallBackColor);
     setWallLeftColor(snapshot.wallLeftColor);
     setWallRightColor(snapshot.wallRightColor);
-    setBlocks(snapshot.blocks.map(block => ({
-      ...block,
-      rotation: block.rotation ?? 0,
-      created: new Date(),
-    })));
+    // Restore structural/visual properties, but preserve current names for existing IDs
+    setBlocks(prevBlocks => {
+      return snapshot.blocks.map(block => {
+        // Look up existing block (if any) to keep its name untouched
+        const current = prevBlocks.find(b => b.id === block.id);
+        const lib = (libraryItems || []).find(item => item.name.toLowerCase() === String(block.name).toLowerCase());
+        return {
+          ...block,
+          name: current?.name ?? block.name,
+          rotation: (block as any).rotation ?? 0,
+          modelPath: (block as any).modelPath ?? lib?.modelPath,
+          created: new Date(),
+        } as any;
+      });
+    });
   }, []);
 
   // Undo function
   const undo = useCallback(() => {
-    if (undoStack.length === 0) return;
+    let stack = undoStack;
+    if (stack.length === 0) return;
+    // Skip rename-only entries
+    while (stack.length > 0 && isRenameAction(stack[stack.length - 1].action)) {
+      stack = stack.slice(0, -1);
+    }
+    if (stack.length === 0) return;
 
     const currentState = createSnapshot("Current State");
-    const stateToRestore = undoStack[undoStack.length - 1];
-    
+    const stateToRestore = stack[stack.length - 1];
+
     setRedoStack(prev => [...prev, currentState]);
-    setUndoStack(prev => prev.slice(0, -1));
-    
+    setUndoStack(prev => prev.slice(0, prev.length - (undoStack.length - stack.length + 1)));
+
     restoreFromSnapshot(stateToRestore);
     setLastAction(`Undid: ${stateToRestore.action}`);
-  }, [undoStack, createSnapshot, restoreFromSnapshot]);
+  }, [undoStack, createSnapshot, restoreFromSnapshot, isRenameAction]);
 
   // Redo function
   const redo = useCallback(() => {
-    if (redoStack.length === 0) return;
+    let stack = redoStack;
+    if (stack.length === 0) return;
+    while (stack.length > 0 && isRenameAction(stack[stack.length - 1].action)) {
+      stack = stack.slice(0, -1);
+    }
+    if (stack.length === 0) return;
 
     const currentState = createSnapshot("Current State");
-    const stateToRestore = redoStack[redoStack.length - 1];
-    
+    const stateToRestore = stack[stack.length - 1];
+
     setUndoStack(prev => [...prev, currentState]);
-    setRedoStack(prev => prev.slice(0, -1));
-    
+    setRedoStack(prev => prev.slice(0, prev.length - (redoStack.length - stack.length + 1)));
+
     restoreFromSnapshot(stateToRestore);
     setLastAction(`Redid: ${stateToRestore.action}`);
-  }, [redoStack, createSnapshot, restoreFromSnapshot]);
+  }, [redoStack, createSnapshot, restoreFromSnapshot, isRenameAction]);
 
   // Enhanced state setters that save to history
   const setWidthWithHistory = useCallback((value: number) => {
@@ -855,6 +1260,7 @@ export default function ModelPage() {
             setWallBackColor(roomState.wallBackColor);
             setWallLeftColor(roomState.wallLeftColor);
             setWallRightColor(roomState.wallRightColor);
+            console.log('Loading blocks from localStorage:', roomState.blocks);
             setBlocks(roomState.blocks || []);
             setChatMessages(roomState.chatMessages || []);
             setMeshyModelUrl(roomState.meshy_model_url || null);
@@ -888,6 +1294,7 @@ export default function ModelPage() {
                     setWallBackColor(backupState.wallBackColor);
                     setWallLeftColor(backupState.wallLeftColor);
                     setWallRightColor(backupState.wallRightColor);
+                    console.log('Loading blocks from localStorage backup:', backupState.blocks);
                     setBlocks(backupState.blocks || []);
                     setChatMessages(backupState.chatMessages || []);
                     setSharedWith(backupState.sharedWith || []);
@@ -1097,7 +1504,22 @@ export default function ModelPage() {
   };
 
   const [chatbotOpen, setChatbotOpen] = useState(true);
-  const [chatMessages, setChatMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string; agent?: string; confidence?: number; reasoning?: string; amazonResults?: any; showAllProducts?: boolean }>>([]);
+  type ChatMessage = {
+    role: 'user' | 'assistant';
+    content: string;
+    agent?: string;
+    confidence?: number;
+    reasoning?: string;
+    amazonResults?: any;
+    showAllProducts?: boolean;
+    // Optional fields used by multi-agent streaming
+    progressData?: any;
+    clarificationNeeded?: boolean;
+    clarificationType?: string;
+    questions?: Array<{ text: string; action: string } | string>;
+  };
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [messagesLoaded, setMessagesLoaded] = useState(false);
   const [chatInput, setChatInput] = useState('');
   
   // Agentic system state
@@ -1108,6 +1530,7 @@ export default function ModelPage() {
   const [chatbotHeight, setChatbotHeight] = useState(480);
   const chatbotRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatInputBarRef = useRef<{ setValue: (v: string) => void; focus: () => void }>(null);
 
   // Auto-scroll to bottom when AI tab is clicked or new messages are added
   const scrollToBottom = () => {
@@ -1384,6 +1807,8 @@ Your role is to ground creative ideas in practical reality while supporting the 
     };
   };
 
+  // const pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY || '' });
+
   // Debounced function to update room in Firestore
   const updateRoomInFirestore = useCallback(
     debounce(async (roomData: any) => {
@@ -1404,10 +1829,13 @@ Your role is to ground creative ideas in practical reality while supporting the 
   useEffect(() => {
     if (!isLoaded || !roomId) return;
 
-    // Prepare sanitized blocks (remove Date objects for Firestore)
+    // Prepare sanitized blocks (remove Date objects and undefined values for Firestore)
     const sanitizedBlocks = blocks.map(block => {
       const { created, ...rest } = block;
-      return rest;
+      // Remove undefined values
+      return Object.fromEntries(
+        Object.entries(rest).filter(([_, value]) => value !== undefined)
+      );
     });
 
     const roomData = {
@@ -1422,7 +1850,8 @@ Your role is to ground creative ideas in practical reality while supporting the 
       wallLeftColor,
       wallRightColor,
       blocks: sanitizedBlocks,
-      chatHistory: chatMessages,
+      // chatHistory: chatMessages,
+      // move chatMessages to a separate doc so that it doesnt need to be rendered on any chat page
     };
 
     updateRoomInFirestore(roomData);
@@ -1432,113 +1861,55 @@ Your role is to ground creative ideas in practical reality while supporting the 
     wallLeftColor, wallRightColor, blocks, chatMessages, updateRoomInFirestore
   ]);
 
-  // Shared action execution function for agentic system
-  // const applyAction = useCallback((actionObj: any) => {
-  //   if (!actionObj || typeof actionObj !== 'object') return null;
+  // Load chat messages from subcollection when room loads
+  useEffect(() => {
+    const loadMessages = async () => {
+      if (!roomId || messagesLoaded) return;
+      
+      try {
+        console.log('🔄 Loading messages from subcollection for room:', roomId);
+        const messages = await MessageStorage.getRecentMessages(roomId, 50);
+        console.log('✅ Loaded messages:', messages.length);
+        setChatMessages(messages);
+        setMessagesLoaded(true);
+      } catch (error) {
+        console.error('❌ Error loading messages:', error);
+        setMessagesLoaded(true); // Still mark as loaded to prevent retry loops
+      }
+    };
+
+    loadMessages();
+  }, [roomId, messagesLoaded]);
+
+  // Helper function to save any message to subcollection
+  const saveMessageToSubcollection = async (message: any) => {
+    if (roomId) {
+      try {
+        await MessageStorage.addMessage(roomId, {
+          ...message,
+          userId: user?.uid || 'unknown'
+        });
+        console.log('✅ Message saved to subcollection:', message.role);
+      } catch (error) {
+        console.error('❌ Error saving message:', error);
+      }
+    }
+  };
+
+  const handleChatSubmit = async (e: FormEvent | null, inputOverride?: string) => {
+    if (e && typeof e.preventDefault === 'function') e.preventDefault();
+    const rawInput = inputOverride !== undefined ? inputOverride : chatInput;
+    if (!rawInput || !rawInput.trim() || isLoading) return;
+
+    const userMessage = rawInput.trim();
+    console.log('🔍 Debug - roomId:', roomId, 'user:', user?.uid, 'message:', userMessage);
     
-  //   const { action, target, value } = actionObj;
-  //   const colorSetters: { [key: string]: (color: string) => void } = {
-  //     floorColor: setFloorColorWithHistory,
-  //     ceilingColor: setCeilingColorWithHistory,
-  //     wallFrontColor: setWallFrontColorWithHistory,
-  //     wallBackColor: setWallBackColorWithHistory,
-  //     wallLeftColor: setWallLeftColorWithHistory,
-  //     wallRightColor: setWallRightColorWithHistory,
-  //   };
-
-  //   if (action === 'set_room_dimensions') {
-  //     const { width: w, length: l, height: h } = value || {};
-  //     if (w && l && h) {
-  //       saveStateToHistory(`AI changed room dimensions to ${w}x${l}x${h}ft`);
-  //       setWidth(w);
-  //       setLength(l);
-  //       setHeight(h);
-  //       return `Changed room dimensions to ${w}x${l}x${h}ft`;
-  //     }
-  //   }
-
-  //   if (action === 'change_color') {
-  //     if (colorSetters[target]) {
-  //       colorSetters[target](value);
-  //       const friendlyTarget = target.replace(/([A-Z])/g, ' $1').toLowerCase();
-  //       return `Changed ${friendlyTarget} to ${value}`;
-  //     } else {
-  //       const matchingBlocks = blocks.filter(block => 
-  //         block.name.toLowerCase().includes(target.toLowerCase()) || 
-  //         target.toLowerCase().includes(block.name.toLowerCase())
-  //       );
-        
-  //       if (matchingBlocks.length === 0) {
-  //         return `Could not find object "${target}"`;
-  //       }
-        
-  //       setBlocksWithHistory(prevBlocks => prevBlocks.map(block => {
-  //         if (block.name.toLowerCase().includes(target.toLowerCase()) || 
-  //             target.toLowerCase().includes(block.name.toLowerCase())) {
-  //           return { ...block, color: value };
-  //         }
-  //         return block;
-  //       }), `AI changed color of ${matchingBlocks.map(b => b.name).join(', ')} to ${value}`);
-        
-  //       return `Changed ${matchingBlocks.map(b => b.name).join(', ')} color to ${value}`;
-  //     }
-  //   }
-
-  //   if (action === 'add_object') {
-  //     const libraryItem = libraryItems.find(item => 
-  //       item.name.toLowerCase().includes(target.toLowerCase()) ||
-  //       target.toLowerCase().includes(item.name.toLowerCase())
-  //     );
-      
-  //     if (libraryItem) {
-  //       const newBlock = {
-  //         id: `block_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-  //         name: libraryItem.name,
-  //         width: libraryItem.width,
-  //         height: libraryItem.height,
-  //         depth: libraryItem.depth,
-  //         x: value?.x || 0,
-  //         y: value?.y || 0,
-  //         z: value?.z || 0,
-  //         rotationY: 0,
-  //         color: libraryItem.color,
-  //         created: new Date(),
-  //       };
-        
-  //       setBlocksWithHistory([...blocks, newBlock], `AI added ${libraryItem.name} to room`);
-  //       return `Added ${libraryItem.name}`;
-  //     } else {
-  //       return `Could not find "${target}" in library`;
-  //     }
-  //   }
-
-  //   if (action === 'remove_object') {
-  //     const matchingBlocks = blocks.filter(block => 
-  //       block.name.toLowerCase().includes(target.toLowerCase()) || 
-  //       target.toLowerCase().includes(block.name.toLowerCase())
-  //     );
-      
-  //     if (matchingBlocks.length === 0) {
-  //       return `Could not find object "${target}" to remove`;
-  //     }
-      
-  //     const idsToRemove = matchingBlocks.map(block => block.id);
-  //     setBlocksWithHistory(
-  //       prevBlocks => prevBlocks.filter(block => !idsToRemove.includes(block.id)), 
-  //       `AI removed ${matchingBlocks.map(b => b.name).join(', ')}`
-  //     );
-      
-  //     return `Removed ${matchingBlocks.map(b => b.name).join(', ')}`;
-  //   }
+    // TEST: Save user message to new subcollection system
+    await saveMessageToSubcollection({
+      role: 'user',
+      content: userMessage
+    });
     
-  //   return null;
-  // }, [blocks, libraryItems, saveStateToHistory, setBlocksWithHistory, setWidth, setLength, setHeight, setFloorColorWithHistory, setCeilingColorWithHistory, setWallFrontColorWithHistory, setWallBackColorWithHistory, setWallLeftColorWithHistory, setWallRightColorWithHistory]);
-
-  const handleChatSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!chatInput.trim() || isLoading) return;
-  
-    const userMessage = chatInput.trim();
     const newMessages: Array<{ role: 'user' | 'assistant'; content: string; agent?: string; confidence?: number; reasoning?: string; amazonResults?: any; showAllProducts?: boolean }> = [
       ...chatMessages,
       { role: 'user', content: userMessage },
@@ -1546,6 +1917,8 @@ Your role is to ground creative ideas in practical reality while supporting the 
     setChatMessages(newMessages);
     setChatInput('');
     setIsLoading(true);
+
+  
     
     // MULTI-AGENT SYSTEM
     if (multiAgentMode) {
@@ -1555,6 +1928,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
         try {
           const multiAgentRequest = {
             user_input: userMessage,
+            userId: user?.uid, // Add userId for memory integration
             room_state: {
               width,
               length,
@@ -1606,18 +1980,32 @@ Your role is to ground creative ideas in practical reality while supporting the 
 
           // Create initial progress message
           const progressMessageIndex = newMessages.length;
-          setChatMessages(prev => [...prev, {
+          const initialProgressMessage = {
             role: 'assistant' as const,
             content: 'multi-agent-progress',
             progressData: { ...progressData }
-          }]);
+          };
+          setChatMessages(prev => [...prev, initialProgressMessage]);
+          
+          // Don't save yet - wait until complete
 
-          const updateProgress = (updatedData: any) => {
+          const updateProgress = async (updatedData: any) => {
+            const updatedMessage = {
+              role: 'assistant' as const,
+              content: 'multi-agent-progress',
+              progressData: { ...updatedData }
+            };
+            
             setChatMessages(prev => prev.map((msg, idx) => 
               idx === progressMessageIndex 
-                ? { ...msg, progressData: { ...updatedData } }
+                ? updatedMessage
                 : msg
             ));
+            
+            // Only save when complete to avoid duplicates
+            if (updatedData.isComplete) {
+              await saveMessageToSubcollection(updatedMessage);
+            }
           };
 
           while (true) {
@@ -1635,7 +2023,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
                 case 'orchestrator_plan': {
                   progressData.orchestratorPlan = evt.content || '';
                   progressData.orchestratorStatus = 'completed';
-                  updateProgress(progressData);
+                  await updateProgress(progressData);
                   break;
                 }
                 case 'routing': {
@@ -1644,7 +2032,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
                     reasoning: evt.reasoning || '',
                     complexity: evt.complexity || 'simple'
                   };
-                  updateProgress(progressData);
+                  await updateProgress(progressData);
                   break;
                 }
                 case 'agent_start': {
@@ -1656,7 +2044,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
                   } else {
                     agent.status = 'running';
                   }
-                  updateProgress(progressData);
+                  await updateProgress(progressData);
                   break;
                 }
                 case 'thought': {
@@ -1671,7 +2059,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
                     agent: agentName,
                     content: evt.content || ''
                   });
-                  updateProgress(progressData);
+                  await updateProgress(progressData);
                   break;
                 }
                 case 'action': {
@@ -1687,31 +2075,43 @@ Your role is to ground creative ideas in practical reality while supporting the 
                     tool: evt.tool || '',
                     args: evt.args || {}
                   });
-                  updateProgress(progressData);
+                  await updateProgress(progressData);
                   break;
                 }
                 case 'actions': {
                   const actions = evt.actions || [];
                   for (const action of actions) {
                     if (action.action === 'change_color') {
-                      if (action.target === 'wallFrontColor') setWallFrontColor(action.value);
-                      else if (action.target === 'wallBackColor') setWallBackColor(action.value);
-                      else if (action.target === 'wallLeftColor') setWallLeftColor(action.value);
-                      else if (action.target === 'wallRightColor') setWallRightColor(action.value);
-                      else if (action.target === 'floorColor') setFloorColor(action.value);
-                      else if (action.target === 'ceilingColor') setCeilingColor(action.value);
+                      if (action.target === 'wallFrontColor') setWallFrontColorWithHistory(action.value);
+                      else if (action.target === 'wallBackColor') setWallBackColorWithHistory(action.value);
+                      else if (action.target === 'wallLeftColor') setWallLeftColorWithHistory(action.value);
+                      else if (action.target === 'wallRightColor') setWallRightColorWithHistory(action.value);
+                      else if (action.target === 'floorColor') setFloorColorWithHistory(action.value);
+                      else if (action.target === 'ceilingColor') setCeilingColorWithHistory(action.value);
                     } else if (action.action === 'add_object') {
+                      // Find the library item to get proper properties including modelPath
+                      const libraryItem = libraryItems.find(item => 
+                        item.name.toLowerCase() === action.target.toLowerCase()
+                      );
+                      
+                      if (libraryItem) {
+                        console.log(`Multi-agent adding ${action.target} with GLB model:`, libraryItem.modelPath);
+                      } else {
+                        console.warn(`Multi-agent adding ${action.target} but no library item found - using fallback`);
+                      }
+                      
                       const newBlock = {
                         id: `block-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
                         name: action.target,
                         x: action.value.x || 0,
                         y: action.value.y || 0,
                         z: action.value.z || 0,
-                        width: action.value.width || 1,
-                        height: action.value.height || 1,
-                        depth: action.value.depth || 1,
-                        color: action.value.color || '#888888',
+                        width: action.value.width || (libraryItem?.width || 1),
+                        height: action.value.height || (libraryItem?.height || 1),
+                        depth: action.value.depth || (libraryItem?.depth || 1),
+                        color: action.value.color || (libraryItem?.color || '#888888'),
                         rotation: action.value.rotation || 0,
+                        modelPath: libraryItem?.modelPath, // This is the key missing property!
                         created: new Date()
                       } as any;
                       setBlocksWithHistory(prev => [...prev, newBlock], `AI added ${action.target}`);
@@ -1740,13 +2140,26 @@ Your role is to ground creative ideas in practical reality while supporting the 
                     agent.status = 'completed';
                     agent.actions = evt.actions || [];
                   }
-                  updateProgress(progressData);
+                  await updateProgress(progressData);
+                  break;
+                }
+                case 'search_results': {
+                  // Append a new assistant message that contains the search results payload
+                  const resultsMessage = {
+                    role: 'assistant' as const,
+                    content: 'search-results',
+                    results: {
+                      query: evt.query || '',
+                      items: Array.isArray(evt.items) ? evt.items.slice(0, 10) : []
+                    }
+                  } as any;
+                  setChatMessages(prev => [...prev, resultsMessage]);
                   break;
                 }
                 case 'final': {
                   progressData.finalMessage = evt.message || 'Multi-agent analysis complete.';
                   progressData.isComplete = true;
-                  updateProgress(progressData);
+                  await updateProgress(progressData);
                   break;
                 }
                 case 'clarification_needed': {
@@ -1759,6 +2172,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
                     questions: evt.questions || []
                   };
                   setChatMessages(prev => [...prev, clarificationMessage]);
+                  await saveMessageToSubcollection(clarificationMessage);
                   setIsLoading(false);
                   return; // Stop processing until user responds
                 }
@@ -1770,7 +2184,9 @@ Your role is to ground creative ideas in practical reality while supporting the 
           return;
         } catch (error) {
           console.error('Multi-agent stream error:', error);
-          setChatMessages(prev => [...prev, { role: 'assistant', content: 'Error running multi-agent workflow.' }]);
+          const errorMessage = { role: 'assistant' as const, content: 'Error running multi-agent workflow.' };
+          setChatMessages(prev => [...prev, errorMessage]);
+          await saveMessageToSubcollection(errorMessage);
           setIsLoading(false);
           return;
         }
@@ -1825,24 +2241,36 @@ Your role is to ground creative ideas in practical reality while supporting the 
           for (const action of data.actions) {
             // Apply action directly to room state
             if (action.action === 'change_color') {
-              if (action.target === 'wallFrontColor') setWallFrontColor(action.value);
-              else if (action.target === 'wallBackColor') setWallBackColor(action.value);
-              else if (action.target === 'wallLeftColor') setWallLeftColor(action.value);
-              else if (action.target === 'wallRightColor') setWallRightColor(action.value);
-              else if (action.target === 'floorColor') setFloorColor(action.value);
-              else if (action.target === 'ceilingColor') setCeilingColor(action.value);
+              if (action.target === 'wallFrontColor') setWallFrontColorWithHistory(action.value);
+              else if (action.target === 'wallBackColor') setWallBackColorWithHistory(action.value);
+              else if (action.target === 'wallLeftColor') setWallLeftColorWithHistory(action.value);
+              else if (action.target === 'wallRightColor') setWallRightColorWithHistory(action.value);
+              else if (action.target === 'floorColor') setFloorColorWithHistory(action.value);
+              else if (action.target === 'ceilingColor') setCeilingColorWithHistory(action.value);
             } else if (action.action === 'add_object') {
+              // Find the library item to get proper properties including modelPath
+              const libraryItem = libraryItems.find(item => 
+                item.name.toLowerCase() === action.target.toLowerCase()
+              );
+              
+              if (libraryItem) {
+                console.log(`Multi-agent adding ${action.target} with GLB model:`, libraryItem.modelPath);
+              } else {
+                console.warn(`Multi-agent adding ${action.target} but no library item found - using fallback`);
+              }
+              
               const newBlock = {
                 id: `block-${Date.now()}`,
                 name: action.target,
                 x: action.value.x || 0,
                 y: action.value.y || 0,
                 z: action.value.z || 0,
-                width: action.value.width || 1,
-                height: action.value.height || 1,
-                depth: action.value.depth || 1,
-                color: action.value.color || '#888888',
+                width: action.value.width || (libraryItem?.width || 1),
+                height: action.value.height || (libraryItem?.height || 1),
+                depth: action.value.depth || (libraryItem?.depth || 1),
+                color: action.value.color || (libraryItem?.color || '#888888'),
                 rotation: action.value.rotation || 0,
+                modelPath: libraryItem?.modelPath, // This is the key missing property!
                 created: new Date()
               };
               setBlocksWithHistory(prev => [...prev, newBlock], `AI added ${action.target}`);
@@ -1934,6 +2362,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               prompt: enhancedUserMessage,
+              userId: user?.uid, // Add userId for Pinecone storage
               agentSystem: {
                 systemPrompt: amazonSystemPrompt,
                 selectedAgent: 'amazon-knowledge-base',
@@ -2006,6 +2435,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
         },
         body: JSON.stringify({
           prompt: userMessage,
+          userId: user?.uid, // Add userId for Pinecone storage
           agentSystem: {
             systemPrompt: agentSystem[primaryAgent].systemPrompt,
             selectedAgent: primaryAgent,
@@ -2105,6 +2535,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
               depth: libraryItem.depth,
               color: libraryItem.color,
               rotation: 0,
+              modelPath: libraryItem.modelPath,
               created: new Date(),
             };
             setBlocksWithHistory(prev => [...prev, newBlock], `AI added ${target} to room`);
@@ -2163,15 +2594,20 @@ Your role is to ground creative ideas in practical reality while supporting the 
       responseMessage = text;
     }
   
+      const assistantMessage = {
+        role: 'assistant' as const,
+        content: responseMessage,
+        agent: primaryAgent,
+        confidence: 0.8,
+      };
+      
       setChatMessages([
         ...newMessages,
-        {
-          role: 'assistant',
-          content: responseMessage,
-          agent: primaryAgent,
-          confidence: 0.8,
-        },
+        assistantMessage,
       ]);
+      
+      // TEST: Save assistant response to subcollection  
+      await saveMessageToSubcollection(assistantMessage);
   
       // Update context from this interaction
       updateContextFromInteraction(userMessage, responseMessage, primaryAgent);
@@ -2196,24 +2632,24 @@ Your role is to ground creative ideas in practical reality while supporting the 
 
   // Library items with predefined furniture and objects
   const libraryItems = [
-    { name: "Single Bed", width: 3, height: 2, depth: 6.5, color: "#8B4513", category: "Bedroom" },
-    { name: "Double Bed", width: 4.5, height: 2, depth: 6.5, color: "#8B4513", category: "Bedroom" },
-    { name: "King Bed", width: 6, height: 2, depth: 6.5, color: "#8B4513", category: "Bedroom" },
-    { name: "Nightstand", width: 1.5, height: 2, depth: 1.5, color: "#654321", category: "Bedroom" },
-    { name: "Dresser", width: 5, height: 3, depth: 1.5, color: "#654321", category: "Bedroom" },
-    { name: "Sofa", width: 7, height: 2.5, depth: 3, color: "#4A5568", category: "Living Room" },
-    { name: "Coffee Table", width: 4, height: 1.5, depth: 2, color: "#8B4513", category: "Living Room" },
-    { name: "TV Stand", width: 5, height: 2, depth: 1.5, color: "#2D3748", category: "Living Room" },
-    { name: "Armchair", width: 3, height: 3, depth: 3, color: "#4A5568", category: "Living Room" },
-    { name: "Dining Table", width: 6, height: 2.5, depth: 3, color: "#8B4513", category: "Dining Room" },
-    { name: "Dining Chair", width: 1.5, height: 3, depth: 1.5, color: "#654321", category: "Dining Room" },
-    { name: "Kitchen Island", width: 6, height: 3, depth: 2.5, color: "#FFFFFF", category: "Kitchen" },
-    { name: "Refrigerator", width: 2.5, height: 6, depth: 2.5, color: "#E2E8F0", category: "Kitchen" },
-    { name: "Desk", width: 4, height: 2.5, depth: 2, color: "#8B4513", category: "Office" },
-    { name: "Office Chair", width: 2, height: 3.5, depth: 2, color: "#2D3748", category: "Office" },
-    { name: "Bookshelf", width: 3, height: 6, depth: 1, color: "#654321", category: "Office" },
-    { name: "Door", width: 3, height: 7, depth: 0.2, color: "#8B4513", category: "Architectural" },
-    { name: "Window", width: 4, height: 4, depth: 0.1, color: "#E2E8F0", category: "Architectural" }
+    { name: "Single Bed", width: 3, height: 2, depth: 6.5, color: "#8B4513", category: "Bedroom", modelPath: "/models/single_bed.glb" },
+    { name: "Double Bed", width: 4.5, height: 2, depth: 6.5, color: "#8B4513", category: "Bedroom", modelPath: "/models/double_bed.glb"},
+    { name: "King Bed", width: 6, height: 2, depth: 6.5, color: "#8B4513", category: "Bedroom", modelPath: "/models/king_bed.glb"},
+    { name: "Nightstand", width: 1.5, height: 2, depth: 1.5, color: "#654321", category: "Bedroom", modelPath: "/models/nightstand.glb"},
+    { name: "Dresser", width: 5, height: 3, depth: 1.5, color: "#654321", category: "Bedroom", modelPath: "/models/dresser.glb"},
+    { name: "Sofa", width: 3, height: 2.5, depth: 7, color: "#4A5568", category: "Living Room", modelPath: "/models/sofa.glb"},
+    { name: "Coffee Table", width: 4, height: 1.5, depth: 2, color: "#8B4513", category: "Living Room", modelPath: "/models/coffee_table.glb"},
+    { name: "TV Stand", width: 5, height: 2, depth: 1.5, color: "#2D3748", category: "Living Room", modelPath: "/models/tv_stand.glb"},
+    { name: "Armchair", width: 3, height: 3, depth: 3, color: "#4A5568", category: "Living Room", modelPath: "/models/armchair.glb"},
+    { name: "Dining Table", width: 6, height: 2.5, depth: 3, color: "#8B4513", category: "Dining Room", modelPath: "/models/dining_table.glb"},
+    { name: "Dining Chair", width: 1.5, height: 3, depth: 1.5, color: "#654321", category: "Dining Room", modelPath: "/models/chair.glb"},
+    { name: "Kitchen Island", width: 6, height: 3, depth: 2.5, color: "#FFFFFF", category: "Kitchen", modelPath: "/models/kitchen_island.glb" },
+    { name: "Refrigerator", width: 2.5, height: 6, depth: 2.5, color: "#E2E8F0", category: "Kitchen", modelPath: "/models/refrigerator.glb" },
+    { name: "Desk", width: 4, height: 2.5, depth: 2, color: "#8B4513", category: "Office", modelPath: "/models/desk.glb" },
+    { name: "Office Chair", width: 2, height: 3.5, depth: 2, color: "#2D3748", category: "Office", modelPath: "/models/office_chair.glb" },
+    { name: "Bookshelf", width: 3, height: 6, depth: 1, color: "#654321", category: "Office", modelPath: "/models/bookshelf.glb" },
+    // { name: "Door", width: 3, height: 7, depth: 0.2, color: "#8B4513", category: "Architectural", modelPath: "/models/door.glb" },
+    // { name: "Window", width: 4, height: 4, depth: 0.1, color: "#E2E8F0", category: "Architectural", modelPath: "/models/window.glb" }
   ];
 
   // Navigation functions
@@ -2238,7 +2674,8 @@ Your role is to ground creative ideas in practical reality while supporting the 
       depth: item.depth,
       color: item.color,
       rotation: 0,
-      created: new Date()
+      created: new Date(),
+      modelPath: item.modelPath,
     };
     setBlocksWithHistory(prev => [...prev, newBlock], `Added ${item.name} from library`);
   };
@@ -2253,7 +2690,10 @@ Your role is to ground creative ideas in practical reality while supporting the 
     if (userPermission === 'edit') {
       const sanitizedBlocks = blocks.map(block => {
         const { created, ...rest } = block;
-        return rest;
+        // Remove undefined values
+        return Object.fromEntries(
+          Object.entries(rest).filter(([_, value]) => value !== undefined)
+        );
       });
 
       const roomData = {
@@ -2291,8 +2731,11 @@ Your role is to ground creative ideas in practical reality while supporting the 
   const chatMessagesRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (chatMessagesRef.current) {
-      chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight;
+    if (!chatMessagesRef.current) return;
+    const el = chatMessagesRef.current;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 4;
+    if (atBottom) {
+      el.scrollTop = el.scrollHeight;
     }
   }, [chatMessages]);
 
@@ -2703,6 +3146,14 @@ Your role is to ground creative ideas in practical reality while supporting the 
                 wallRightColor={wallLeftColor}
                 blocks={blocks}
                 previewBlock={previewMode ? blockConfig : null}
+                onBlockClick={(blockId) => {
+                  setSelectedBlockId(blockId);
+                  setCurrentPage('objects');
+                  if (sidebarTab === 'ai'){
+                    setSidebarTab('menu');
+                  }
+                  scrollToSelectedObject(blockId);
+                }}
               />
               {meshyModelUrl && (
                 <Suspense fallback={null}>
@@ -2775,6 +3226,15 @@ Your role is to ground creative ideas in practical reality while supporting the 
                 wallRightColor={wallRightColor}
                 blocks={blocks}
                 previewBlock={previewMode ? blockConfig : null}
+                onBlockClick={(blockId) => {
+                  setSelectedBlockId(blockId);
+                  setCurrentPage('objects');
+                  
+                  if (sidebarTab === 'ai'){
+                    setSidebarTab('menu');
+                  }
+                  scrollToSelectedObject(blockId);
+                }}
               />
               {meshyModelUrl && (
                 <Suspense fallback={null}>
@@ -2824,7 +3284,6 @@ Your role is to ground creative ideas in practical reality while supporting the 
         {/* Tab Switcher */}
         <div style={{
           display: 'flex',
-          borderBottom: '1px solid #e5e7eb',
           background: '#fafafa',
         }}>
           <button
@@ -2847,8 +3306,14 @@ Your role is to ground creative ideas in practical reality while supporting the 
           <button
             onClick={() => {
               setSidebarTab('ai');
-              // Scroll to bottom after a short delay to ensure the AI content is rendered
-              setTimeout(() => scrollToBottom(), 100);
+              // Immediate jump to bottom without reflow delay
+              requestAnimationFrame(() => {
+                if (chatMessagesRef.current) {
+                  chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight;
+                } else {
+                  messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+                }
+              });
             }}
             style={{
               flex: 1,
@@ -2874,13 +3339,10 @@ Your role is to ground creative ideas in practical reality while supporting the 
                 
                           {/* Header */}
               <div style={{
-                padding: sidebarCollapsed ? "8px" : "12px 16px",
-                borderBottom: "1px solid #e5e7eb",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: sidebarCollapsed ? "center" : "space-between"
+                padding: 0,
+                display: "none"
               }}>
-            </div>
+              </div>
 
                           {/* Navigation Content */}
               <div style={{
@@ -3346,26 +3808,24 @@ Your role is to ground creative ideas in practical reality while supporting the 
                     <button
                       onClick={goBack}
                       style={{
-                        width: "100%",
-                        padding: "12px 16px",
-                        background: "#f3f4f6",
-                        border: "1px solid #e5e7eb",
+                        padding: "4px",
+                        background: "transparent",
+                        border: "none",
                         borderRadius: 6,
                         display: "flex",
                         alignItems: "center",
-                        gap: 8,
+                        justifyContent: "flex-start",
                         cursor: "pointer",
-                        fontSize: 14,
-                        fontWeight: 500,
                         color: "#374151",
-                        marginBottom: 16
+                        marginBottom: 8,
+                        width: "auto",
+                        alignSelf: "flex-start"
                       }}
                     >
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                         <path d="m12 19-7-7 7-7"></path>
                         <path d="M19 12H5"></path>
                       </svg>
-                      <span>Back to Menu</span>
                     </button>
 
                     {/* Page Content */}
@@ -3515,6 +3975,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
                                       step={0.1}
                                       onChange={e => userPermission === 'edit' && setBlockConfig(prev => ({...prev, [dim]: Number(e.target.value)}))}
                                       onClick={(e) => e.stopPropagation()}
+                                      onWheel={(e) => e.stopPropagation()}
                                       disabled={userPermission !== 'edit'}
                                                                               style={{
                                           width: "100%",
@@ -3557,6 +4018,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
                                           userPermission === 'edit' && setBlockConfig(prev => ({...prev, [pos]: Number(e.target.value)}));
                                         }}
                                         onClick={(e) => e.stopPropagation()}
+                                        onWheel={(e) => e.stopPropagation()}
                                         disabled={userPermission !== 'edit'}
                                         style={{
                                           width: "100%",
@@ -3607,7 +4069,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
                                     rotation: 0,
                                     created: new Date()
                                   };
-                                  setBlocks(prev => [...prev, newBlock]);
+                                  setBlocksWithHistory(prev => [...prev, newBlock], `Added ${newBlock.name}`);
                                   setPreviewMode(false);
                                 }
                               }}
@@ -3692,289 +4154,677 @@ Your role is to ground creative ideas in practical reality while supporting the 
                     )}
 
 {currentPage === 'objects' && (
-                      <div>
-                        <h3 style={{ margin: "0 0 16px", fontSize: 16, fontWeight: 600, color: "#111827" }}>Objects</h3>
-                        <div style={{
-                          background: "#ffffff",
-                          borderRadius: 12,
-                          padding: "16px",
-                          border: "1px solid #e5e7eb"
-                        }}>
-                          <div style={{
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "space-between",
-                            marginBottom: 16
-                          }}>
-                            <h4 style={{
-                              margin: 0,
-                              fontSize: 14,
-                              fontWeight: 600,
-                              color: "#374151"
-                            }}>Objects</h4>
-                            <button
-                              onClick={() => setBlocks([])}
-                              disabled={userPermission !== 'edit'}
-                              style={{
-                                background: userPermission === 'edit' ? "#fef2f2" : "#f3f4f6",
-                                color: userPermission === 'edit' ? "#dc2626" : "#9ca3af",
-                                border: "1px solid #fecaca",
-                                borderRadius: 6,
-                                padding: "4px 8px",
-                                fontSize: 11,
-                                fontWeight: 500,
-                                cursor: userPermission === 'edit' ? "pointer" : "not-allowed",
-                                opacity: userPermission === 'edit' ? 1 : 0.5
-                              }}
-                            >
-                              Clear All
-                            </button>
-                          </div>
-                          
-                          <div style={{ 
-                            display: "flex", 
-                            flexDirection: "column", 
-                            gap: 8,
-                            maxHeight: 400,
-                            overflowY: "auto"
-                          }}>
-                            {blocks.map((block, index) => (
-                              <div
-                                key={block.id}
-                                style={{
-                                  background: selectedBlockId === block.id ? "#eff6ff" : "#f9fafb",
-                                  border: `1px solid ${selectedBlockId === block.id ? "#3b82f6" : "#e5e7eb"}`,
-                                  borderRadius: 8,
-                                  padding: "12px",
-                                  cursor: "pointer",
-                                  transition: "all 0.2s ease"
-                                }}
-                                onClick={() => userPermission === 'edit' && setSelectedBlockId(selectedBlockId === block.id ? null : block.id)}
-                              >
-                                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                                    <div
-                                      style={{
-                                        width: 24,
-                                        height: 24,
-                                        background: block.color,
-                                        borderRadius: 6,
-                                        border: "1px solid #d1d5db",
-                                        boxShadow: "0 1px 3px rgba(0, 0, 0, 0.1)"
-                                      }}
-                                    />
-                                    <div style={{ fontSize: 14, fontWeight: 500, color: "#111827" }}>
-                                      {block.name}
-                                    </div>
-                                  </div>
-                                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                    <div style={{ 
-                                      fontSize: 12, 
-                                      color: "#6b7280",
-                                      padding: "2px 6px",
-                                      background: "#f3f4f6",
-                                      borderRadius: 4
-                                    }}>
-                                      {selectedBlockId === block.id ? "−" : "+"}
-                                    </div>
-                                    <button
-                                      onClick={(e) => {
-                                        if (userPermission === 'edit') {
-                                          e.stopPropagation();
-                                          setBlocks(prev => prev.filter(b => b.id !== block.id));
-                                          if (selectedBlockId === block.id) setSelectedBlockId(null);
-                                        }
-                                      }}
-                                      disabled={userPermission !== 'edit'}
-                                                                              style={{
-                                          background: "transparent",
-                                          border: "none",
-                                          color: userPermission === 'edit' ? "#9ca3af" : "#d1d5db",
-                                          cursor: userPermission === 'edit' ? "pointer" : "not-allowed",
-                                          padding: "4px",
-                                          borderRadius: 4,
-                                          fontSize: 14,
-                                          fontWeight: "bold",
-                                          opacity: userPermission === 'edit' ? 1 : 0.5
-                                        }}
-                                    >
-                                      ×
-                                    </button>
-                                  </div>
-                                </div>
-                                
-                                {/* Expanded controls for selected block */}
-                                {selectedBlockId === block.id && (
-                                  <div style={{ 
-                                    marginTop: 12, 
-                                    paddingTop: 12, 
-                                    borderTop: "1px solid #e5e7eb",
-                                    display: "flex",
-                                    flexDirection: "column",
-                                    gap: 12
-                                  }}>
-                                    {/* Name editor */}
-                                    <div onClick={(e) => e.stopPropagation()}>
-                                      <label style={{ fontSize: 11, color: "#6b7280", marginBottom: 6, display: "block" }}>Name</label>
-                                                                             <input
+                                             <div>
+                         <div style={{ 
+                           display: "flex", 
+                           alignItems: "center", 
+                           justifyContent: "space-between", 
+                           marginBottom: 16 
+                         }}>
+                           <h3 style={{ margin: 0, fontSize: 18, fontWeight: 600, color: "#111827" }}>Objects</h3>
+                           <button
+                             onClick={() => setBlocksWithHistory([], 'Cleared all objects')}
+                             disabled={userPermission !== 'edit'}
+                             style={{
+                               background: userPermission === 'edit' ? "#fef2f2" : "#f3f4f6",
+                               color: userPermission === 'edit' ? "#dc2626" : "#9ca3af",
+                               border: "1px solid #fecaca",
+                               borderRadius: 6,
+                               padding: "4px 8px",
+                               fontSize: 11,
+                               fontWeight: 500,
+                               cursor: userPermission === 'edit' ? "pointer" : "not-allowed",
+                               opacity: userPermission === 'edit' ? 1 : 0.5
+                             }}
+                           >
+                             Clear All
+                           </button>
+                                                  </div>
+                         
+                         {/* Horizontal Object Type Buttons */}
+                         {blocks.length > 0 && (
+                                                     <div 
+                            ref={horizontalScrollRef}
+                            style={{
+                              display: "flex",
+                              gap: 12,
+                              marginBottom: 16,
+                              overflowX: "auto",
+                              paddingBottom: 8,
+                              scrollbarWidth: "none", // Firefox
+                              msOverflowStyle: "none", // IE/Edge
+                            }}>
+                             <style jsx>{`
+                               div::-webkit-scrollbar {
+                                 display: none;
+                               }
+                             `}</style>
+                             {(() => {
+                               const nameToIndex: Record<string, number> = {};
+                               return blocks.map((block) => {
+                                 const idx = (nameToIndex[block.name] || 0) + 1;
+                                 nameToIndex[block.name] = idx;
+                                 const label = idx > 1 ? `${block.name} ${idx}` : block.name;
+                                 const isSelected = selectedBlockId === block.id;
+                                 return (
+                                   <button
+                                     key={block.id}
+                                     onClick={() => {
+                                       if (userPermission === 'edit') {
+                                         setSelectedBlockId(block.id);
+                                       }
+                                     }}
+                                     style={{
+                                       display: "flex",
+                                       alignItems: "center",
+                                       gap: 8,
+                                       padding: "10px 12px",
+                                       background: isSelected ? "#111827" : "#f8f9fa",
+                                       border: `1px solid ${isSelected ? "#111827" : "#e5e7eb"}`,
+                                       borderRadius: 6,
+                                       cursor: userPermission === 'edit' ? "pointer" : "not-allowed",
+                                       fontSize: 14,
+                                       fontWeight: 500,
+                                       color: isSelected ? "#ffffff" : "#374151",
+                                       transition: "all 0.2s ease",
+                                       whiteSpace: "nowrap",
+                                       minWidth: "fit-content",
+                                       opacity: userPermission === 'edit' ? 1 : 0.5
+                                     }}
+                                     onMouseEnter={e => {
+                                       if (userPermission === 'edit' && !isSelected) {
+                                         (e.currentTarget as HTMLButtonElement).style.background = "#f3f4f6";
+                                         (e.currentTarget as HTMLButtonElement).style.borderColor = "#d1d5db";
+                                       }
+                                     }}
+                                     onMouseLeave={e => {
+                                       if (userPermission === 'edit' && !isSelected) {
+                                         (e.currentTarget as HTMLButtonElement).style.background = "#f8f9fa";
+                                         (e.currentTarget as HTMLButtonElement).style.borderColor = "#e5e7eb";
+                                       }
+                                     }}
+                                   >
+                                     {block.name === 'Sofa' ? <Sofa size={18} /> : 
+                                      block.name === 'Door' ? <DoorOpen size={18} /> : 
+                                      block.name === 'Window' ? <RectangleHorizontal size={18} /> :
+                                      block.name.includes('Bed') ? <Bed size={18} /> :
+                                      block.name === 'Armchair' ? <Armchair size={18} /> :
+                                      block.name === 'Nightstand' ? <Archive size={18} /> :
+                                      block.name === 'Dresser' ? <Archive size={18} /> :
+                                      block.name.includes('Table') ? <Utensils size={18} /> :
+                                      block.name.includes('Kitchen') ? <ChefHat size={18} /> :
+                                      block.name === 'Desk' ? <Laptop size={18} /> :
+                                      block.name === 'Bookshelf' ? <BookOpen size={18} /> :
+                                      <Package size={18} />}
+                                     {label}
+                                   </button>
+                                 );
+                               });
+                             })()}
+                           </div>
+                                                  )}
+
+                         {/* Inspector Card for Selected Object */}
+                         {selectedBlockId && blocks.find(b => b.id === selectedBlockId) && (
+                           <div style={{
+                             background: "#ffffff",
+                             border: "1px solid #e5e7eb",
+                             borderRadius: 12,
+                             padding: "20px",
+                             marginTop: 16
+                           }}>
+                             {(() => {
+                               const selectedBlock = blocks.find(b => b.id === selectedBlockId);
+                               if (!selectedBlock) return null;
+                               
+                               return (
+                                 <div>
+                                   {/* Object Header */}
+                                   <div style={{
+                                     display: "flex",
+                                     alignItems: "center",
+                                     justifyContent: "space-between",
+                                     marginBottom: 20
+                                   }}>
+                                     <div style={{
+                                       display: "flex",
+                                       alignItems: "center",
+                                       gap: 12
+                                     }}>
+                                       {/* Object Icon */}
+                                       <div style={{
+                                         width: 48,
+                                         height: 48,
+                                         background: selectedBlock.modelPath ? "#f3f4f6" : selectedBlock.color,
+                                         borderRadius: 12,
+                                         border: "1px solid #e5e7eb",
+                                         display: "flex",
+                                         alignItems: "center",
+                                         justifyContent: "center",
+                                         overflow: "hidden"
+                                       }}>
+                                         <div style={{
+                                           width: "100%",
+                                           height: "100%",
+                                           background: `linear-gradient(135deg, ${selectedBlock.color}cc, ${selectedBlock.color})`,
+                                           display: "flex",
+                                           alignItems: "center",
+                                           justifyContent: "center",
+                                           fontSize: 18,
+                                           position: "relative"
+                                         }}>
+                                           {selectedBlock.name === 'Sofa' ? '🛋️' : 
+                                            selectedBlock.name.includes('Bed') ? '🛏️' :
+                                            selectedBlock.name === 'Armchair' ? '🪑' :
+                                            selectedBlock.name === 'Dresser' ? '🗄️' :
+                                            selectedBlock.name.includes('Table') ? '🪑' :
+                                            selectedBlock.name.includes('Chair') ? '🪑' :
+                                            selectedBlock.name.includes('Kitchen') ? '🏠' :
+                                            selectedBlock.name === 'Refrigerator' ? '❄️' :
+                                            selectedBlock.name === 'Desk' ? '🖥️' :
+                                            selectedBlock.name === 'Bookshelf' ? '📚' :
+                                            selectedBlock.name === 'Door' ? '🚪' :
+                                            selectedBlock.name === 'Window' ? '🪟' :
+                                            '📦'}
+                                           {selectedBlock.modelPath && (
+                                             <div style={{
+                                               position: 'absolute',
+                                               top: 4,
+                                               right: 4,
+                                               background: 'rgba(34, 197, 94, 0.9)',
+                                               color: 'white',
+                                               borderRadius: '50%',
+                                               width: 12,
+                                               height: 12,
+                                               display: 'flex',
+                                               alignItems: 'center',
+                                               justifyContent: 'center',
+                                               fontSize: 6,
+                                               fontWeight: 'bold'
+                                             }}>
+                                               3D
+                                             </div>
+                                           )}
+                                         </div>
+                                       </div>
+                                       
+                                       <h3 style={{
+                                         fontSize: 18,
+                                         fontWeight: 600,
+                                         color: "#111827",
+                                         margin: 0
+                                       }}>
+                                         {selectedBlock.name}
+                                       </h3>
+                                     </div>
+                                     
+                                     {/* Delete Button */}
+                                     <button
+                                       onClick={() => {
+                                         if (userPermission === 'edit') {
+                                           setBlocksWithHistory(prev => prev.filter(b => b.id !== selectedBlock.id), `Deleted ${selectedBlock.name}`);
+                                           setSelectedBlockId(null);
+                                         }
+                                       }}
+                                       disabled={userPermission !== 'edit'}
+                                       style={{
+                                         width: 32,
+                                         height: 32,
+                                         background: "transparent",
+                                         border: "none",
+                                         borderRadius: 8,
+                                         cursor: userPermission === 'edit' ? "pointer" : "not-allowed",
+                                         display: "flex",
+                                         alignItems: "center",
+                                         justifyContent: "center",
+                                         fontSize: 18,
+                                         color: userPermission === 'edit' ? "#6b7280" : "#d1d5db",
+                                         opacity: userPermission === 'edit' ? 1 : 0.5,
+                                         transition: "all 0.2s ease"
+                                       }}
+                                       onMouseEnter={e => {
+                                         if (userPermission === 'edit') {
+                                           e.currentTarget.style.background = "#fee2e2";
+                                           e.currentTarget.style.color = "#dc2626";
+                                         }
+                                       }}
+                                       onMouseLeave={e => {
+                                         if (userPermission === 'edit') {
+                                           e.currentTarget.style.background = "transparent";
+                                           e.currentTarget.style.color = "#6b7280";
+                                         }
+                                       }}
+                                     >
+                                       ×
+                                     </button>
+                                   </div>
+
+                                   {/* Inspector Form */}
+                                   <div style={{
+                                     display: "flex",
+                                     flexDirection: "column",
+                                     gap: 20
+                                   }}>
+                                     {/* Name Field */}
+                                     <div>
+                                       <label style={{
+                                         display: "block",
+                                         fontSize: 14,
+                                         fontWeight: 500,
+                                         color: "#374151",
+                                         marginBottom: 8
+                                       }}>
+                                         Name
+                                       </label>
+                                       <input
                                          type="text"
-                                         value={block.name}
+                                         value={selectedBlock.name}
                                          onChange={(e) => {
                                            if (userPermission === 'edit') {
-                                             setBlocks(prev => prev.map(b => 
-                                               b.id === block.id ? { ...b, name: e.target.value } : b
-                                             ));
+                                             const newName = e.target.value;
+                                             setBlocksWithHistory(prev => prev.map(b => 
+                                               b.id === selectedBlock.id ? { ...b, name: newName } : b
+                                             ), `Renamed ${selectedBlock.name} to ${newName}`);
                                            }
                                          }}
-                                         onClick={(e) => e.stopPropagation()}
                                          disabled={userPermission !== 'edit'}
                                          style={{
                                            width: "100%",
-                                           fontSize: 12,
-                                           padding: "8px 12px",
-                                           borderRadius: 6,
+                                           padding: "12px 16px",
+                                           fontSize: 16,
+                                           borderRadius: 12,
                                            border: "1px solid #d1d5db",
                                            background: userPermission === 'edit' ? "#ffffff" : "#f9fafb",
                                            color: userPermission === 'edit' ? "#111827" : "#9ca3af",
-                                           fontWeight: 500,
+                                           outline: "none",
                                            cursor: userPermission === 'edit' ? "text" : "not-allowed"
                                          }}
-                                         placeholder="Enter block name"
                                        />
-                                    </div>
+                                     </div>
 
-                                    {/* Color picker - matching wall/ceiling style */}
-                                    <div onClick={(e) => e.stopPropagation()}>
-                                      <label style={{ fontSize: 11, color: "#6b7280", marginBottom: 6, display: "block" }}>Color</label>
-                                      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                                        <input 
-                                          type="color" 
-                                          value={block.color} 
-                                          onChange={(e) => {
-                                            setBlocks(prev => prev.map(b => 
-                                              b.id === block.id ? { ...b, color: e.target.value } : b
-                                            ));
-                                          }}
-                                          onClick={(e) => e.stopPropagation()}
-                                          style={{ 
-                                            width: 32, 
-                                            height: 32, 
-                                            border: "1px solid #d1d5db", 
-                                            borderRadius: 6, 
-                                            cursor: "pointer",
-                                            background: "none"
-                                          }} 
-                                        />
-                                        <div style={{ flex: 1 }}>
-                                          <div style={{ fontSize: 12, fontWeight: 500, color: "#374151" }}>Block Color</div>
-                                          <div style={{ fontSize: 10, color: "#9ca3af", fontFamily: "monospace" }}>{block.color}</div>
-                                        </div>
-                                      </div>
-                                    </div>
-                                    
-                                    {/* Position controls */}
-                                    <div onClick={(e) => e.stopPropagation()}>
-                                      <label style={{ fontSize: 11, color: "#6b7280", marginBottom: 6, display: "block" }}>Position</label>
-                                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
-                                        {(['x', 'y', 'z'] as const).map(axis => (
-                                          <div key={axis}>
-                                            <label style={{ fontSize: 9, color: "#9ca3af", display: "block", marginBottom: 2, textTransform: "uppercase" }}>{axis}</label>
-                                                                                         <input
-                                               type="number"
-                                               value={block[axis]}
-                                               step={0.1}
-                                               onChange={(e) => {
-                                                 setBlocks(prev => prev.map(b => 
-                                                   b.id === block.id ? { ...b, [axis]: Number(e.target.value) } : b
-                                                 ));
-                                               }}
-                                               onClick={(e) => e.stopPropagation()}
-                                               style={{
-                                                 width: "100%",
-                                                 fontSize: 11,
-                                                 padding: "6px 8px",
-                                                 borderRadius: 4,
-                                                 border: "1px solid #d1d5db",
-                                                 background: "#ffffff",
-                                                 color: "#111827"
-                                               }}
-                                             />
-                                          </div>
-                                        ))}
-                                      </div>
-                                    </div>
-                                    
-                                    {/* Size controls */}
-                                    <div onClick={(e) => e.stopPropagation()}>
-                                      <label style={{ fontSize: 11, color: "#6b7280", marginBottom: 6, display: "block" }}>Dimensions</label>
-                                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
-                                        {(['width', 'height', 'depth'] as const).map(dimension => (
-                                          <div key={dimension}>
-                                            <label style={{ fontSize: 9, color: "#9ca3af", display: "block", marginBottom: 2, textTransform: "uppercase" }}>{dimension}</label>
-                                                                                         <input
-                                               type="number"
-                                               value={block[dimension]}
-                                               min={0.1}
-                                               step={0.1}
-                                               onChange={(e) => {
-                                                 setBlocks(prev => prev.map(b => 
-                                                   b.id === block.id ? { ...b, [dimension]: Number(e.target.value) } : b
-                                                 ));
-                                               }}
-                                               onClick={(e) => e.stopPropagation()}
-                                               style={{
-                                                 width: "100%",
-                                                 fontSize: 11,
-                                                 padding: "6px 8px",
-                                                 borderRadius: 4,
-                                                 border: "1px solid #d1d5db",
-                                                 background: "#ffffff",
-                                                 color: "#111827"
-                                               }}
-                                             />
-                                          </div>
-                                        ))}
-                                      </div>
-                                    </div>
+                                     {/* Color */}
+                                     <div>
+                                       <label style={{
+                                         display: "block",
+                                         fontSize: 14,
+                                         fontWeight: 500,
+                                         color: "#374151",
+                                         marginBottom: 8
+                                       }}>
+                                         Color
+                                       </label>
+                                       <div style={{
+                                         display: "flex",
+                                         alignItems: "center",
+                                         gap: 12
+                                       }}>
+                                         <input
+                                           type="color"
+                                           value={selectedBlock.color}
+                                           onChange={(e) => {
+                                             if (userPermission === 'edit') {
+                                               const newColor = e.target.value;
+                                               setBlocksWithHistory(prev => prev.map(b => 
+                                                 b.id === selectedBlock.id ? { ...b, color: newColor } : b
+                                               ), `Changed ${selectedBlock.name} color`);
+                                             }
+                                           }}
+                                           disabled={userPermission !== 'edit'}
+                                           style={{
+                                             width: 48,
+                                             height: 48,
+                                             border: "1px solid #d1d5db",
+                                             borderRadius: 12,
+                                             cursor: userPermission === 'edit' ? "pointer" : "not-allowed",
+                                             background: "none"
+                                           }}
+                                         />
+                                         <div>
+                                           <div style={{
+                                             fontSize: 14,
+                                             fontWeight: 500,
+                                             color: "#111827"
+                                           }}>
+                                             Block color
+                                           </div>
+                                           <div style={{
+                                             fontSize: 12,
+                                             color: "#6b7280",
+                                             fontFamily: "monospace"
+                                           }}>
+                                             {selectedBlock.color}
+                                           </div>
+                                         </div>
+                                       </div>
+                                     </div>
 
-                                    <div style={{ marginTop: 12 }}>
-                                      <label style={{ fontSize: 11, color: "#6b7280", marginBottom: 6, display: "block" }}>Rotation</label>
-                                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                        <span style={{ fontSize: 16 }}>⟲</span>
-                                        <input
-                                          type="number"
-                                          min={0}
-                                          max={360}
-                                          step={0.1}
-                                          value={block.rotation !== undefined ? (block.rotation * 180 / Math.PI) : 0}
-                                          onChange={e => {
-                                            const deg = Number(e.target.value);
-                                            setBlocks(prev => prev.map(b =>
-                                              b.id === block.id ? { ...b, rotation: deg * Math.PI / 180 } : b
-                                            ));
-                                          }}
-                                          onClick={e => e.stopPropagation()}
-                                          onFocus={e => e.stopPropagation()}
-                                          style={{
-                                            width: 80,
-                                            fontSize: 13,
-                                            padding: "8px 10px",
-                                            borderRadius: 6,
-                                            border: "1px solid #d1d5db",
-                                            background: "#ffffff",
-                                            color: "#111827",
-                                            textAlign: "center"
-                                          }}
-                                        />
-                                        <span style={{ fontSize: 13, color: "#aaa" }}>°</span>
-                                      </div>
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
+                                     {/* Position */}
+                                     <div>
+                                       <label style={{
+                                         display: "block",
+                                         fontSize: 14,
+                                         fontWeight: 500,
+                                         color: "#374151",
+                                         marginBottom: 8
+                                       }}>
+                                         Position
+                                       </label>
+                                       <div style={{
+                                         display: "grid",
+                                         gridTemplateColumns: "1fr 1fr 1fr",
+                                         gap: 12
+                                       }}>
+                                         {(['x', 'y', 'z'] as const).map(axis => (
+                                           <div key={axis}>
+                                             <label style={{
+                                               display: "block",
+                                               fontSize: 12,
+                                               fontWeight: 500,
+                                               color: "#6b7280",
+                                               marginBottom: 4,
+                                               textTransform: "uppercase"
+                                             }}>
+                                               {axis}
+                                             </label>
+                                             <div style={{ 
+                                               display: "flex", 
+                                               alignItems: "stretch",
+                                               width: "100%",
+                                               maxWidth: "100%",
+                                               overflow: "hidden"
+                                             }}>
+                                               <input
+                                                 type="text"
+                                                 value={selectedBlock[axis]}
+                                                 onChange={(e) => {
+                                                   if (userPermission === 'edit') {
+                                                     const value = parseFloat(e.target.value);
+                                                     if (!isNaN(value)) {
+                                                       setBlocksWithHistory(prev => prev.map(b => 
+                                                         b.id === selectedBlock.id ? { ...b, [axis]: value } : b
+                                                       ), `Moved ${selectedBlock.name} ${axis.toUpperCase()} to ${value}`);
+                                                     }
+                                                   }
+                                                 }}
+                                                 disabled={userPermission !== 'edit'}
+                                                 style={{
+                                                   flex: 1,
+                                                   padding: "6px 8px",
+                                                   fontSize: 13,
+                                                   borderRadius: "6px 0 0 6px",
+                                                   border: "1px solid #d1d5db",
+                                                   borderRight: "none",
+                                                   background: userPermission === 'edit' ? "#ffffff" : "#f9fafb",
+                                                   color: userPermission === 'edit' ? "#111827" : "#9ca3af",
+                                                   outline: "none",
+                                                   textAlign: "center",
+                                                   cursor: userPermission === 'edit' ? "text" : "not-allowed",
+                                                   minWidth: 0,
+                                                   width: 0
+                                                 }}
+                                               />
+                                               <div style={{ 
+                                                 display: "flex", 
+                                                 flexDirection: "column",
+                                                 flexShrink: 0
+                                               }}>
+                                                 <button
+                                                   type="button"
+                                                   onClick={() => {
+                                                     if (userPermission === 'edit') {
+                                                       setBlocksWithHistory(prev => prev.map(b => 
+                                                         b.id === selectedBlock.id ? { ...b, [axis]: Number((b[axis] + 0.1).toFixed(1)) } : b
+                                                       ), `Nudged ${selectedBlock.name} ${axis.toUpperCase()} +0.1`);
+                                                     }
+                                                   }}
+                                                   disabled={userPermission !== 'edit'}
+                                                   style={{
+                                                     width: 20,
+                                                     height: 18,
+                                                     background: userPermission === 'edit' ? "#f3f4f6" : "#f9fafb",
+                                                     border: "1px solid #d1d5db",
+                                                     borderRadius: "0 3px 0 0",
+                                                     borderLeft: "none",
+                                                     cursor: userPermission === 'edit' ? "pointer" : "not-allowed",
+                                                     display: "flex",
+                                                     alignItems: "center",
+                                                     justifyContent: "center",
+                                                     fontSize: 8,
+                                                     color: userPermission === 'edit' ? "#374151" : "#9ca3af",
+                                                     fontWeight: "bold",
+                                                     lineHeight: 1
+                                                   }}
+                                                 >
+                                                   ▲
+                                                 </button>
+                                                 <button
+                                                   type="button"
+                                                   onClick={() => {
+                                                     if (userPermission === 'edit') {
+                                                       setBlocksWithHistory(prev => prev.map(b => 
+                                                         b.id === selectedBlock.id ? { ...b, [axis]: Number((b[axis] - 0.1).toFixed(1)) } : b
+                                                       ), `Nudged ${selectedBlock.name} ${axis.toUpperCase()} -0.1`);
+                                                     }
+                                                   }}
+                                                   disabled={userPermission !== 'edit'}
+                                                   style={{
+                                                     width: 20,
+                                                     height: 18,
+                                                     background: userPermission === 'edit' ? "#f3f4f6" : "#f9fafb",
+                                                     border: "1px solid #d1d5db",
+                                                     borderRadius: "0 0 3px 0",
+                                                     borderTop: "none",
+                                                     borderLeft: "none",
+                                                     cursor: userPermission === 'edit' ? "pointer" : "not-allowed",
+                                                     display: "flex",
+                                                     alignItems: "center",
+                                                     justifyContent: "center",
+                                                     fontSize: 8,
+                                                     color: userPermission === 'edit' ? "#374151" : "#9ca3af",
+                                                     fontWeight: "bold",
+                                                     lineHeight: 1
+                                                   }}
+                                                 >
+                                                   ▼
+                                                 </button>
+                                               </div>
+                                             </div>
+                                           </div>
+                                         ))}
+                                       </div>
+                                     </div>
+
+                                     {/* Dimensions */}
+                                     <div>
+                                       <label style={{
+                                         display: "block",
+                                         fontSize: 14,
+                                         fontWeight: 500,
+                                         color: "#374151",
+                                         marginBottom: 8
+                                       }}>
+                                         Dimensions
+                                       </label>
+                                       <div style={{
+                                         display: "grid",
+                                         gridTemplateColumns: "1fr 1fr 1fr",
+                                         gap: 12
+                                       }}>
+                                         {(['width', 'height', 'depth'] as const).map(dimension => (
+                                           <div key={dimension}>
+                                             <label style={{
+                                               display: "block",
+                                               fontSize: 12,
+                                               fontWeight: 500,
+                                               color: "#6b7280",
+                                               marginBottom: 4,
+                                               textTransform: "uppercase"
+                                             }}>
+                                               {dimension}
+                                             </label>
+                                             <div style={{ 
+                                               display: "flex", 
+                                               alignItems: "stretch",
+                                               width: "100%",
+                                               maxWidth: "100%",
+                                               overflow: "hidden"
+                                             }}>
+                                               <input
+                                                 type="text"
+                                                 value={selectedBlock[dimension]}
+                                                 onChange={(e) => {
+                                                   if (userPermission === 'edit') {
+                                                     const value = parseFloat(e.target.value);
+                                                     if (!isNaN(value) && value >= 0.1) {
+                                                       setBlocksWithHistory(prev => prev.map(b => 
+                                                         b.id === selectedBlock.id ? { ...b, [dimension]: value } : b
+                                                       ), `Resized ${selectedBlock.name} ${dimension} to ${value}`);
+                                                     }
+                                                   }
+                                                 }}
+                                                 disabled={userPermission !== 'edit'}
+                                                 style={{
+                                                   flex: 1,
+                                                   padding: "6px 8px",
+                                                   fontSize: 13,
+                                                   borderRadius: "6px 0 0 6px",
+                                                   border: "1px solid #d1d5db",
+                                                   borderRight: "none",
+                                                   background: userPermission === 'edit' ? "#ffffff" : "#f9fafb",
+                                                   color: userPermission === 'edit' ? "#111827" : "#9ca3af",
+                                                   outline: "none",
+                                                   textAlign: "center",
+                                                   cursor: userPermission === 'edit' ? "text" : "not-allowed",
+                                                   minWidth: 0,
+                                                   width: 0
+                                                 }}
+                                               />
+                                               <div style={{ 
+                                                 display: "flex", 
+                                                 flexDirection: "column",
+                                                 flexShrink: 0
+                                               }}>
+                                                 <button
+                                                   type="button"
+                                                   onClick={() => {
+                                                     if (userPermission === 'edit') {
+                                                       setBlocksWithHistory(prev => prev.map(b => 
+                                                         b.id === selectedBlock.id ? { ...b, [dimension]: Number((Math.max(0.1, b[dimension] + 0.1)).toFixed(1)) } : b
+                                                       ), `Increased ${selectedBlock.name} ${dimension} by 0.1`);
+                                                     }
+                                                   }}
+                                                   disabled={userPermission !== 'edit'}
+                                                   style={{
+                                                     width: 20,
+                                                     height: 18,
+                                                     background: userPermission === 'edit' ? "#f3f4f6" : "#f9fafb",
+                                                     border: "1px solid #d1d5db",
+                                                     borderRadius: "0 3px 0 0",
+                                                     borderLeft: "none",
+                                                     cursor: userPermission === 'edit' ? "pointer" : "not-allowed",
+                                                     display: "flex",
+                                                     alignItems: "center",
+                                                     justifyContent: "center",
+                                                     fontSize: 8,
+                                                     color: userPermission === 'edit' ? "#374151" : "#9ca3af",
+                                                     fontWeight: "bold",
+                                                     lineHeight: 1
+                                                   }}
+                                                 >
+                                                   ▲
+                                                 </button>
+                                                 <button
+                                                   type="button"
+                                                   onClick={() => {
+                                                     if (userPermission === 'edit') {
+                                                       setBlocksWithHistory(prev => prev.map(b => 
+                                                         b.id === selectedBlock.id ? { ...b, [dimension]: Number((Math.max(0.1, b[dimension] - 0.1)).toFixed(1)) } : b
+                                                       ), `Decreased ${selectedBlock.name} ${dimension} by 0.1`);
+                                                     }
+                                                   }}
+                                                   disabled={userPermission !== 'edit'}
+                                                   style={{
+                                                     width: 20,
+                                                     height: 18,
+                                                     background: userPermission === 'edit' ? "#f3f4f6" : "#f9fafb",
+                                                     border: "1px solid #d1d5db",
+                                                     borderRadius: "0 0 3px 0",
+                                                     borderTop: "none",
+                                                     borderLeft: "none",
+                                                     cursor: userPermission === 'edit' ? "pointer" : "not-allowed",
+                                                     display: "flex",
+                                                     alignItems: "center",
+                                                     justifyContent: "center",
+                                                     fontSize: 8,
+                                                     color: userPermission === 'edit' ? "#374151" : "#9ca3af",
+                                                     fontWeight: "bold",
+                                                     lineHeight: 1
+                                                   }}
+                                                 >
+                                                   ▼
+                                                 </button>
+                                               </div>
+                                             </div>
+                                           </div>
+                                         ))}
+                                       </div>
+                                     </div>
+
+                                     {/* Rotation */}
+                                     <div>
+                                       <label style={{
+                                         display: "block",
+                                         fontSize: 14,
+                                         fontWeight: 500,
+                                         color: "#374151",
+                                         marginBottom: 8
+                                       }}>
+                                         Rotation
+                                       </label>
+                                       <div style={{
+                                         display: "flex",
+                                         alignItems: "center",
+                                         gap: 12
+                                       }}>
+                                         <span style={{ fontSize: 20 }}>⟲</span>
+                                         <input
+                                           type="number"
+                                           min={0}
+                                           max={360}
+                                           step={1}
+                                           value={selectedBlock.rotation !== undefined ? Math.round(selectedBlock.rotation * 180 / Math.PI) : 0}
+                                           onChange={e => {
+                                             if (userPermission === 'edit') {
+                                               const deg = Number(e.target.value);
+                                               setBlocksWithHistory(prev => prev.map(b =>
+                                                 b.id === selectedBlock.id ? { ...b, rotation: deg * Math.PI / 180 } : b
+                                               ), `Rotated ${selectedBlock.name} to ${deg}°`);
+                                             }
+                                           }}
+                                           disabled={userPermission !== 'edit'}
+                                           style={{
+                                             width: 100,
+                                             padding: "8px 12px",
+                                             fontSize: 14,
+                                             borderRadius: 8,
+                                             border: "1px solid #d1d5db",
+                                             background: userPermission === 'edit' ? "#ffffff" : "#f9fafb",
+                                             color: userPermission === 'edit' ? "#111827" : "#9ca3af",
+                                             outline: "none",
+                                             textAlign: "center",
+                                             cursor: userPermission === 'edit' ? "text" : "not-allowed"
+                                           }}
+                                         />
+                                         <span style={{ fontSize: 14, color: "#6b7280" }}>°</span>
+                                       </div>
+                                     </div>
+                                   </div>
+                                 </div>
+                               );
+                             })()}
+                           </div>
+                         )}
+                     
                       </div>
                     )}
 
@@ -4006,6 +4856,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
                                     step={0.1}
                                     value={dim.value}
                                     onChange={(e) => dim.setter(Number(e.target.value))}
+                                    onWheel={(e) => e.stopPropagation()}
                                     disabled={userPermission !== 'edit'}
                                     style={{
                                       flex: 1,
@@ -4078,119 +4929,288 @@ Your role is to ground creative ideas in practical reality while supporting the 
 
                     {currentPage === 'library' && (
                       <div>
-                        <h3 style={{ margin: "0 0 16px", fontSize: 16, fontWeight: 600, color: "#111827" }}>Library</h3>
-                        <div style={{
-                          background: "#ffffff",
-                          borderRadius: 12,
-                          padding: "16px",
-                          border: "1px solid #e5e7eb"
+                        {/* Library Header */}
+                        <div style={{ 
+                          display: 'flex', 
+                          justifyContent: 'space-between', 
+                          alignItems: 'center', 
+                          marginBottom: 20 
                         }}>
-                          <div style={{
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "space-between",
-                            marginBottom: 16
-                          }}>
-                            <h4 style={{
-                              margin: 0,
-                              fontSize: 14,
-                              fontWeight: 600,
-                              color: "#374151"
-                            }}>Furniture & Objects</h4>
-                            <div style={{ fontSize: 11, color: "#9ca3af" }}>
-                              Click to add to room
-                            </div>
+                          <h3 style={{ margin: 0, fontSize: 24, fontWeight: 600, color: "#111827" }}>
+                            Library
+                          </h3>
+                          
+                          {/* Search Input */}
+                          <div style={{ position: 'relative' }}>
+                            <input
+                              type="text"
+                              placeholder="Search furniture..."
+                              value={librarySearchTerm}
+                              onChange={(e) => setLibrarySearchTerm(e.target.value)}
+                              style={{
+                                background: '#f3f4f6',
+                                border: '1px solid #d1d5db',
+                                borderRadius: 8,
+                                padding: '8px 40px 8px 12px',
+                                fontSize: 14,
+                                color: '#374151',
+                                width: 200,
+                                outline: 'none'
+                              }}
+                            />
+                            <svg 
+                              style={{
+                                position: 'absolute',
+                                right: 12,
+                                top: '50%',
+                                transform: 'translateY(-50%)',
+                                pointerEvents: 'none',
+                                color: '#6b7280'
+                              }}
+                              width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+                            >
+                              <circle cx="11" cy="11" r="8"></circle>
+                              <path d="M21 21l-4.35-4.35"></path>
+                            </svg>
+                          </div>
+                        </div>
+                        
+                        {/* Filter and Sort Row */}
+                        <div style={{ 
+                          display: 'flex', 
+                          gap: 12, 
+                          marginBottom: 20 
+                        }}>
+                          {/* Category Filter */}
+                          <div style={{ position: 'relative' }}>
+                            <select
+                              value={libraryCategory}
+                              onChange={(e) => setLibraryCategory(e.target.value)}
+                              style={{
+                                background: '#ffffff',
+                                border: '1px solid #d1d5db',
+                                borderRadius: 8,
+                                padding: '8px 32px 8px 12px',
+                                fontSize: 14,
+                                color: '#374151',
+                                cursor: 'pointer',
+                                appearance: 'none',
+                                minWidth: 120
+                              }}
+                            >
+                              <option value="All">📂 All</option>
+                              <option value="Bedroom">🛏️ Beds</option>
+                              <option value="Living Room">🛋️ Living Room</option>
+                              <option value="Dining Room">🍽️ Dining Room</option>
+                              <option value="Kitchen">👩‍🍳 Kitchen</option>
+                              <option value="Office">💼 Office</option>
+                              <option value="Architectural">🏗️ Architectural</option>
+                            </select>
+                            <svg style={{
+                              position: 'absolute',
+                              right: 8,
+                              top: '50%',
+                              transform: 'translateY(-50%)',
+                              pointerEvents: 'none'
+                            }} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <polyline points="6,9 12,15 18,9"></polyline>
+                            </svg>
                           </div>
                           
-                          <div style={{ 
-                            display: "flex", 
-                            flexDirection: "column", 
-                            gap: 8,
-                            maxHeight: 400,
-                            overflowY: "auto"
-                          }}>
-                            {/* Group items by category */}
-                            {["Bedroom", "Living Room", "Dining Room", "Kitchen", "Office", "Architectural"].map(category => {
-                              const categoryItems = libraryItems.filter(item => item.category === category);
-                              if (categoryItems.length === 0) return null;
-                              
-                              return (
-                                <div key={category} style={{ marginBottom: 16 }}>
-                                  <div style={{
-                                    fontSize: 12,
-                                    fontWeight: 600,
-                                    color: "#6b7280",
-                                    marginBottom: 8,
-                                    textTransform: "uppercase",
-                                    letterSpacing: "0.5px"
-                                  }}>
-                                    {category}
-                                  </div>
-                                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                                    {categoryItems.map((item, index) => (
-                                      <div
-                                        key={`${category}-${index}`}
-                                        onClick={() => userPermission === 'edit' && addLibraryItem(item)}
-                                        style={{
-                                          background: userPermission === 'edit' ? "#f9fafb" : "#f3f4f6",
-                                          border: "1px solid #e5e7eb",
-                                          borderRadius: 6,
-                                          padding: "10px 12px",
-                                          cursor: userPermission === 'edit' ? "pointer" : "not-allowed",
-                                          transition: "all 0.2s ease",
-                                          display: "flex",
-                                          alignItems: "center",
-                                          justifyContent: "space-between",
-                                          opacity: userPermission === 'edit' ? 1 : 0.5
-                                        }}
-                                        onMouseEnter={e => {
-                                          if (userPermission === 'edit') {
-                                            e.currentTarget.style.background = "#eff6ff";
-                                            e.currentTarget.style.borderColor = "#3b82f6";
-                                          }
-                                        }}
-                                        onMouseLeave={e => {
-                                          if (userPermission === 'edit') {
-                                            e.currentTarget.style.background = "#f9fafb";
-                                            e.currentTarget.style.borderColor = "#e5e7eb";
-                                          }
-                                        }}
-                                      >
-                                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                                          <div
-                                            style={{
-                                              width: 20,
-                                              height: 20,
-                                              background: item.color,
-                                              borderRadius: 4,
-                                              border: "1px solid #d1d5db",
-                                              boxShadow: "0 1px 2px rgba(0, 0, 0, 0.1)"
-                                            }}
-                                          />
-                                          <div>
-                                            <div style={{ fontSize: 13, fontWeight: 500, color: "#111827" }}>
-                                              {item.name}
-                                            </div>
-                                            <div style={{ fontSize: 10, color: "#6b7280" }}>
-                                              {item.width}' × {item.height}' × {item.depth}'
-                                            </div>
-                                          </div>
-                                        </div>
-                                        <div style={{
-                                          fontSize: 12,
-                                          color: userPermission === 'edit' ? "#3b82f6" : "#9ca3af",
-                                          fontWeight: 500,
-                                          opacity: userPermission === 'edit' ? 0.8 : 0.5
-                                        }}>
-                                          {userPermission === 'edit' ? "+ Add" : "View Only"}
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              );
-                            })}
+                          {/* Sort Dropdown */}
+                          <div style={{ position: 'relative' }}>
+                            <select
+                              value={librarySortBy}
+                              onChange={(e) => setLibrarySortBy(e.target.value)}
+                              style={{
+                                background: '#ffffff',
+                                border: '1px solid #d1d5db',
+                                borderRadius: 8,
+                                padding: '8px 32px 8px 12px',
+                                fontSize: 14,
+                                color: '#374151',
+                                cursor: 'pointer',
+                                appearance: 'none',
+                                minWidth: 140
+                              }}
+                            >
+                              <option value="Name">Sort by Name</option>
+                              <option value="Category">Sort by Category</option>
+                              <option value="Size">Sort by Size</option>
+                            </select>
+                            <svg style={{
+                              position: 'absolute',
+                              right: 8,
+                              top: '50%',
+                              transform: 'translateY(-50%)',
+                              pointerEvents: 'none'
+                            }} width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <polyline points="6,9 12,15 18,9"></polyline>
+                            </svg>
                           </div>
+                        </div>
+                        
+                        {/* Items Grid */}
+                        <div style={{ 
+                          display: "grid", 
+                          gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", 
+                          gap: 16,
+                          maxHeight: '60vh',
+                          overflowY: 'auto',
+                          paddingRight: 8
+                        }}>
+                          {(() => {
+                            // Filter and sort items
+                            let filteredItems = libraryCategory === 'All' 
+                              ? libraryItems 
+                              : libraryItems.filter(item => item.category === libraryCategory);
+                            
+                            // Apply search filter
+                            if (librarySearchTerm) {
+                              filteredItems = filteredItems.filter(item => 
+                                item.name.toLowerCase().includes(librarySearchTerm.toLowerCase())
+                              );
+                            }
+                            
+                            // Sort items
+                            if (librarySortBy === 'Name') {
+                              filteredItems = filteredItems.sort((a, b) => a.name.localeCompare(b.name));
+                            } else if (librarySortBy === 'Category') {
+                              filteredItems = filteredItems.sort((a, b) => a.category.localeCompare(b.category));
+                            } else if (librarySortBy === 'Size') {
+                              filteredItems = filteredItems.sort((a, b) => (a.width * a.height * a.depth) - (b.width * b.height * b.depth));
+                            }
+                            
+                            return filteredItems.map((item, index) => (
+                              <div
+                                key={`${item.name}-${index}`}
+                                onClick={() => userPermission === 'edit' && addLibraryItem(item)}
+                                style={{
+                                  background: "#ffffff",
+                                  border: "1px solid #e5e7eb",
+                                  borderRadius: 12,
+                                  padding: 16,
+                                  cursor: userPermission === 'edit' ? "pointer" : "not-allowed",
+                                  transition: "all 0.2s ease",
+                                  textAlign: "center",
+                                  boxShadow: "0 1px 3px rgba(0, 0, 0, 0.1)",
+                                  opacity: userPermission === 'edit' ? 1 : 0.5
+                                }}
+                              >
+                                {/* Optimized 2D Preview - No Canvas lag */}
+                                <div style={{ 
+                                  width: "100%", 
+                                  height: 160, 
+                                  marginBottom: 12,
+                                  borderRadius: 10,
+                                  overflow: "hidden",
+                                  border: "1px solid #eef2f7",
+                                  background: `linear-gradient(135deg, ${item.color}cc, ${item.color})`,
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  flexDirection: "column",
+                                  gap: 8,
+                                  position: "relative"
+                                }}>
+                                  {/* Icon based on item type */}
+                                  <div style={{ fontSize: 32, opacity: 0.9 }}>
+                                    {item.name === 'Sofa' ? '🛋️' : 
+                                     item.name.includes('Bed') ? '🛏️' :
+                                     item.name === 'Armchair' ? '🪑' :
+                                     item.name === 'Dresser' ? '🗄️' :
+                                     item.name.includes('Table') ? '🪑' :
+                                     item.name.includes('Chair') ? '🪑' :
+                                     item.name.includes('Kitchen') ? '🏠' :
+                                     item.name === 'Refrigerator' ? '❄️' :
+                                     item.name === 'Desk' ? '🖥️' :
+                                     item.name === 'Bookshelf' ? '📚' :
+                                     item.name === 'Door' ? '🚪' :
+                                     item.name === 'Window' ? '🪟' :
+                                     '📦'}
+                                  </div>
+                                  {/* Subtle dimension indicator */}
+                                  <div style={{
+                                    fontSize: 10,
+                                    color: 'rgba(255,255,255,0.8)',
+                                    background: 'rgba(0,0,0,0.2)',
+                                    padding: '2px 6px',
+                                    borderRadius: 4,
+                                    fontFamily: 'monospace'
+                                  }}>
+                                    {item.width}×{item.height}×{item.depth}
+                                  </div>
+                                  {/* Model indicator */}
+                                  {item.modelPath && (
+                                    <div style={{
+                                      position: 'absolute',
+                                      top: 8,
+                                      right: 8,
+                                      background: 'rgba(34, 197, 94, 0.9)',
+                                      color: 'white',
+                                      borderRadius: '50%',
+                                      width: 16,
+                                      height: 16,
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      fontSize: 8,
+                                      fontWeight: 'bold'
+                                    }}>
+                                      3D
+                                    </div>
+                                  )}
+                                </div>
+                                
+                                {/* Item Name */}
+                                <h4 style={{
+                                  fontSize: 16,
+                                  fontWeight: 600,
+                                  color: "#111827",
+                                  margin: "0 0 4px 0",
+                                  lineHeight: "1.2"
+                                }}>
+                                  {item.name}
+                                </h4>
+                                
+                                {/* Dimensions */}
+                                <p style={{
+                                  fontSize: 12,
+                                  color: "#6b7280",
+                                  margin: "0 0 12px 0"
+                                }}>
+                                  {item.width}' × {item.height}' × {item.depth}'
+                                </p>
+                                
+                                {/* Add Button */}
+                                <button style={{
+                                  background: "#fbbf24",
+                                  color: "#92400e",
+                                  border: "none",
+                                  borderRadius: 8,
+                                  padding: "8px 16px",
+                                  fontSize: 14,
+                                  fontWeight: 600,
+                                  cursor: userPermission === 'edit' ? "pointer" : "not-allowed",
+                                  width: "100%",
+                                  transition: "all 0.2s ease"
+                                }}
+                                onMouseEnter={e => {
+                                  if (userPermission === 'edit') {
+                                    e.currentTarget.style.background = "#f59e0b";
+                                  }
+                                }}
+                                onMouseLeave={e => {
+                                  if (userPermission === 'edit') {
+                                    e.currentTarget.style.background = "#fbbf24";
+                                  }
+                                }}
+                                >
+                                  + Add
+                                </button>
+                              </div>
+                            ));
+                          })()}
                         </div>
                       </div>
                     )}
@@ -4213,7 +5233,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
 
               
               {/* Header */}
-              <div
+              {/* <div
                 onClick={() => router.push('/chat')}
                 style={{
                   padding: '14px 20px 10px 20px',
@@ -4245,7 +5265,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
                 <span style={{ fontSize: 16, color: '#bdbdbd', marginLeft: 8, display: 'flex', alignItems: 'center', transition: 'color 0.2s' }}>
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 6l6 6-6 6"/></svg>
                 </span>
-              </div>
+              </div> */}
               {/* Chat Messages */}
               <div style={{
                 flex: 1,
@@ -4327,7 +5347,14 @@ Your role is to ground creative ideas in practical reality while supporting the 
                 )}
                 {/* Chat messages */}
                 {chatMessages.map((msg, i) => (
-                  <div key={i} style={{ marginBottom: 8 }}>
+                  <div
+                    key={i}
+                    style={{
+                      marginBottom: 8,
+                      display: 'flex',
+                      justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start'
+                    }}
+                  >
                     {/* Special handling for multi-agent progress messages */}
                     {msg.content === 'multi-agent-progress' && msg.progressData ? (
                       <MultiAgentProgress
@@ -4338,31 +5365,330 @@ Your role is to ground creative ideas in practical reality while supporting the 
                         finalMessage={msg.progressData.finalMessage}
                         isComplete={msg.progressData.isComplete}
                       />
-                    ) : msg.clarificationNeeded && msg.questions ? (
+                    ) : msg.clarificationNeeded && Array.isArray(msg.questions) ? (
                       /* Special handling for clarification questions */
                       <ClarificationComponent 
                         message={msg.content} 
-                        questions={msg.questions}
+                        questions={(msg.questions as any[]).map(q => typeof q === 'string' ? { text: q, action: q } : q)}
                         onSubmit={(selectedActions) => {
-                          // Combine multiple selected actions into a single input
                           const combinedResponse = selectedActions.join('; ');
-                          setChatInput(combinedResponse);
-                          // Auto-submit the clarification
+                          chatInputBarRef.current?.setValue(combinedResponse);
                           setTimeout(() => {
-                            const form = document.querySelector('form') as HTMLFormElement;
-                            if (form) form.requestSubmit();
-                          }, 100);
+                            handleChatSubmit(null, combinedResponse);
+                          }, 50);
                         }}
                       />
+                    ) : msg.content === 'search-results' && (msg as any).results ? (
+                      /* Special handling for search results */
+                      <div style={{
+                        marginTop: 16,
+                        marginBottom: 16,
+                        padding: '20px 0',
+                        width: '100%',
+                        maxWidth: '100%',
+                        overflow: 'hidden'
+                      }}>
+                                              {/* Search Results Header */}
+                      <div style={{
+                        marginBottom: 16,
+                        padding: '12px 0',
+                        borderBottom: '1px solid #e5e7eb',
+                        maxWidth: '100%',
+                        overflow: 'hidden'
+                      }}>
+                        <div style={{
+                          fontSize: 18,
+                          fontWeight: 600,
+                          color: '#111827',
+                          marginBottom: 8
+                        }}>
+                          Here are the search results for your query
+                        </div>
+                        <div style={{
+                          fontSize: 14,
+                          color: '#6b7280',
+                          marginBottom: 16
+                        }}>
+                          Found {((msg as any).results.items || []).length} results. Pick one you like, or ask me to search for more options.
+                        </div>
+                      </div>
+
+                        {/* Results Grid */}
+                        <div style={{
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+                          gap: 16,
+                          width: '100%',
+                          maxWidth: '100%',
+                          overflow: 'hidden'
+                        }}>
+                          {((msg as any).results.items || []).map((item: any, idx: number) => (
+                            <div key={idx} style={{
+                              background: '#fff',
+                              border: '1px solid #e5e7eb',
+                              borderRadius: 8,
+                              overflow: 'hidden',
+                              boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+                              transition: 'border-color 0.2s ease',
+                              cursor: 'pointer',
+                              position: 'relative',
+                              width: '100%',
+                              maxWidth: '100%'
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.borderColor = '#d1d5db';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.borderColor = '#e5e7eb';
+                            }}>
+                              
+                              {/* Image Section */}
+                              <div style={{
+                                position: 'relative',
+                                height: 160,
+                                background: '#f9fafb',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                overflow: 'hidden'
+                              }}>
+                                {(() => { let imgSrc: string | null = null; try { if (item && item.image && item.image !== 'No image URL') { imgSrc = item.image; } else if (item && item.url) { const host = new URL(item.url).hostname; imgSrc = `https://www.google.com/s2/favicons?sz=128&domain=${host}`; } } catch {} return imgSrc; })() ? (
+                                  <img
+                                    src={(function(){ try { if (item && item.image && item.image !== 'No image URL') return item.image; if (item && item.url) { const host = new URL(item.url).hostname; return `https://www.google.com/s2/favicons?sz=128&domain=${host}`; } } catch {} return ''; })()}
+                                    alt={item.title || 'Product'}
+                                    loading="lazy"
+                                    style={{
+                                      width: '100%',
+                                      height: '100%',
+                                      objectFit: 'cover'
+                                    }}
+                                    onError={(e) => {
+                                      e.currentTarget.style.display = 'none';
+                                      const placeholder = e.currentTarget.nextElementSibling as HTMLElement;
+                                      if (placeholder) placeholder.style.display = 'flex';
+                                    }}
+                                  />
+                                ) : null}
+                                <div style={{
+                                  display: item.image && item.image !== 'No image URL' ? 'none' : 'flex',
+                                  flexDirection: 'column',
+                                  alignItems: 'center',
+                                  gap: 6,
+                                  color: '#9ca3af'
+                                }}>
+                                  <span style={{ fontSize: 24 }}>📷</span>
+                                  <span style={{ fontSize: 11, fontWeight: 400 }}>No image</span>
+                                </div>
+                                
+                                {/* Source Badge */}
+                                <div style={{
+                                  position: 'absolute',
+                                  top: 8,
+                                  right: 8,
+                                  background: '#374151',
+                                  color: '#fff',
+                                  padding: '3px 6px',
+                                  borderRadius: 4,
+                                  fontSize: 9,
+                                  fontWeight: 500,
+                                  textTransform: 'uppercase'
+                                }}>
+                                  {(() => { 
+                                    try { 
+                                      return new URL(item.url || '').hostname.replace('www.', '').split('.')[0]; 
+                                    } catch { 
+                                      return 'web'; 
+                                    } 
+                                  })()}
+                                </div>
+                              </div>
+
+                              {/* Content Section */}
+                              <div style={{ padding: '20px 16px', width: '100%' }}>
+                                {/* Title */}
+                                <div style={{
+                                  fontSize: 14,
+                                  fontWeight: 700,
+                                  color: '#111827',
+                                  marginBottom: 8,
+                                  lineHeight: 1.4,
+                                  height: '2.8em',
+                                  overflow: 'hidden',
+                                  display: '-webkit-box',
+                                  WebkitLineClamp: 2,
+                                  WebkitBoxOrient: 'vertical',
+                                  wordBreak: 'break-word',
+                                  maxWidth: '100%'
+                                }}>
+                                  {item.title || 'Product Title'}
+                                </div>
+
+                                {/* Description */}
+                                {item.content && !(typeof item.content === 'string' && item.content.startsWith('Image')) && (
+                                  <div style={{
+                                    fontSize: 12,
+                                    color: '#6b7280',
+                                    marginBottom: 16,
+                                    lineHeight: 1.4,
+                                    height: '2.4em',
+                                    overflow: 'hidden',
+                                    display: '-webkit-box',
+                                    WebkitLineClamp: 2,
+                                    WebkitBoxOrient: 'vertical',
+                                    wordBreak: 'break-word',
+                                    maxWidth: '100%'
+                                  }}>
+                                    {item.content}
+                                  </div>
+                                )}
+
+                                {/* Action Buttons */}
+                                <div style={{ 
+                                  display: 'flex', 
+                                  gap: 8, 
+                                  width: '100%',
+                                  minWidth: 0
+                                }}>
+                                  {item.url && (
+                                    <a 
+                                      href={item.url} 
+                                      target="_blank" 
+                                      rel="noopener noreferrer" 
+                                      style={{
+                                        flex: 1,
+                                        background: '#f3f4f6',
+                                        color: '#374151',
+                                        border: '1px solid #d1d5db',
+                                        borderRadius: 6,
+                                        padding: '8px 12px',
+                                        fontSize: 12,
+                                        fontWeight: 500,
+                                        textDecoration: 'none',
+                                        textAlign: 'center',
+                                        cursor: 'pointer',
+                                        minWidth: 0,
+                                        whiteSpace: 'nowrap',
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis'
+                                      }}
+                                    >
+                                      View Product
+                                    </a>
+                                  )}
+                                  <button
+                                    onClick={async (ev) => {
+                                      const btn = ev.currentTarget as HTMLButtonElement;
+                                      try {
+                                        btn.disabled = true; btn.textContent = 'Generating…';
+                                        // 1) Resolve image URL
+                                        const imgUrl = item.image || '';
+                                        if (!imgUrl) throw new Error('No image available');
+                                        // 2) Download image as blob and build FormData
+                                        const imgRes = await fetch(imgUrl, { mode: 'cors' });
+                                        const blob = await imgRes.blob();
+                                        const file = new File([blob], 'product.png', { type: blob.type || 'image/png' });
+                                        const fd = new FormData();
+                                        fd.append('file', file);
+                                        fd.append('photo_perspective', 'front');
+                                        // 3) Call clip_server generate endpoint
+                                        const clipUrl = (process.env.NEXT_PUBLIC_CLIP_SERVER_URL || 'http://localhost:8000') + '/generate-room-model';
+                                        const resp = await fetch(clipUrl, { method: 'POST', body: fd });
+                                        const data = await resp.json();
+                                        const modelUrl = data?.model_data?.meshy_model_url || data?.meshy_model_url || data?.model_url;
+                                        if (!resp.ok || !modelUrl) throw new Error(data?.error || 'Meshy generation failed');
+                                        // 4) Add GLB to scene using proxy to avoid CORS
+                                        const proxied = `/api/model-proxy?url=${encodeURIComponent(modelUrl)}`;
+                                        const newBlock: any = {
+                                          id: `meshy-${Date.now()}`,
+                                          name: item.title || 'Generated Model',
+                                          x: 0, y: 0, z: 0,
+                                          width: 4, height: 2, depth: 4,
+                                          color: '#cccccc',
+                                          modelPath: proxied,
+                                        };
+                                        setBlocksWithHistory(prev => [...prev, newBlock], `Added ${newBlock.name} (Meshy)`);
+                                      } catch (e) {
+                                        console.error('Meshy generation error', e);
+                                      } finally {
+                                        btn.disabled = false; btn.textContent = 'Generate 3D Model';
+                                      }
+                                    }}
+                                    style={{
+                                      flex: 1,
+                                      background: '#111827',
+                                      color: '#fff',
+                                      border: 'none',
+                                      borderRadius: 6,
+                                      padding: '8px 12px',
+                                      fontSize: 12,
+                                      fontWeight: 500,
+                                      cursor: 'pointer',
+                                      minWidth: 0,
+                                      whiteSpace: 'nowrap',
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis'
+                                    }}
+                                  >
+                                    Generate 3D Model
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* No Results Message */}
+                        {((msg as any).results.items || []).length === 0 && (
+                          <div style={{
+                            textAlign: 'center',
+                            padding: '32px 20px',
+                            color: '#6b7280',
+                            border: '1px solid #e5e7eb',
+                            borderRadius: 8,
+                            background: '#f9fafb'
+                          }}>
+                            <div style={{ fontSize: 16, fontWeight: 500, marginBottom: 8 }}>No results found</div>
+                            <div style={{ fontSize: 14 }}>Try adjusting your search terms or check your spelling</div>
+                          </div>
+                        )}
+
+                        {/* User Guidance Footer */}
+                        {((msg as any).results.items || []).length > 0 && (
+                          <div style={{
+                            marginTop: 20,
+                            padding: '16px 20px',
+                            background: '#f8fafc',
+                            border: '1px solid #e2e8f0',
+                            borderRadius: 8,
+                            textAlign: 'center'
+                          }}>
+                            <div style={{
+                              fontSize: 14,
+                              color: '#475569',
+                              marginBottom: 8
+                            }}>
+                              💡 <strong>What's next?</strong>
+                            </div>
+                            <div style={{
+                              fontSize: 13,
+                              color: '#64748b',
+                              lineHeight: 1.4
+                            }}>
+                              Click "Generate 3D Model" on any item you like, or ask me to search for more options. 
+                              I'll use Meshy to create a 3D model and add it to your room!
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     ) : (
                       <div
                         style={{
-                          alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
                           background: msg.role === 'user' ? '#e0e7ef' : '#fff',
                           color: '#222',
                           borderRadius: 8,
-                          padding: '12px 16px',
-                          maxWidth: msg.role === 'assistant' && msg.content.includes('Amazon') ? '98%' : '85%',
+                          padding: msg.role === 'user' ? '8px 14px 0px 14px' : '12px 16px',
+                          maxWidth: msg.role === 'assistant' && msg.content.includes('Amazon') ? '98%' : '80%',
+                          width: 'fit-content',
                           fontSize: 14,
                           boxShadow: msg.role === 'assistant' ? '0 1px 4px rgba(0,0,0,0.04)' : 'none',
                           border: msg.role === 'assistant' ? '1px solid #e5e7eb' : 'none',
@@ -4456,7 +5782,8 @@ Your role is to ground creative ideas in practical reality while supporting the 
                             onClick={() => {
                               const updatedMessages = chatMessages.map((message, index) => {
                                 if (message === msg) {
-                                  return { ...message, showAllProducts: !message.showAllProducts };
+                                  const nextState = !message.showAllProducts;
+                                  return { ...(message as any), showAllProducts: nextState, visibleProductCount: nextState ? ((message as any).visibleProductCount || 5) : (message as any).visibleProductCount };
                                 }
                                 return message;
                               });
@@ -4515,7 +5842,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
                             </div>
                             
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                              {msg.amazonResults.products.map((product: any, index: number) => (
+                              {(msg.amazonResults.products.slice(0, (msg as any).visibleProductCount || 5)).map((product: any, index: number) => (
                                 <div key={index} style={{
                                   background: '#fff',
                                   border: '1px solid #e5e7eb',
@@ -4541,6 +5868,9 @@ Your role is to ground creative ideas in practical reality while supporting the 
                                       <img 
                                         src={product.image} 
                                         alt={product.title}
+                                        loading="lazy"
+                                        width={80}
+                                        height={80}
                                         style={{
                                           width: '80px',
                                           height: '80px',
@@ -4609,6 +5939,34 @@ Your role is to ground creative ideas in practical reality while supporting the 
                                 </div>
                               ))}
                             </div>
+                            {(((msg as any).visibleProductCount || 5) < msg.amazonResults.products.length) && (
+                              <div style={{ display: 'flex', justifyContent: 'center', marginTop: 12 }}>
+                                <button
+                                  onClick={() => {
+                                    const updatedMessages = chatMessages.map((message) => {
+                                      if (message === msg) {
+                                        const current = (message as any).visibleProductCount || 5;
+                                        const next = Math.min(current + 10, msg.amazonResults.products.length);
+                                        return { ...(message as any), visibleProductCount: next };
+                                      }
+                                      return message;
+                                    });
+                                    setChatMessages(updatedMessages);
+                                  }}
+                                  style={{
+                                    background: '#f3f4f6',
+                                    border: '1px solid #d1d5db',
+                                    borderRadius: 8,
+                                    padding: '8px 12px',
+                                    fontSize: 12,
+                                    color: '#374151',
+                                    cursor: 'pointer'
+                                  }}
+                                >
+                                  Load more
+                                </button>
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>
@@ -4643,161 +6001,100 @@ Your role is to ground creative ideas in practical reality while supporting the 
                 <div ref={messagesEndRef} />
               </div>
               {/* Input */}
-              <form
-                onSubmit={handleChatSubmit}
-                style={{
-                  padding: '0px 20px',
-                  background: '#ffffff',
-                  borderTop: '1px solid #e5e7eb',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'stretch',
-                  gap: 0,
-                  position: 'relative',
-                  minHeight: 100,
-                  height: 240,
-                  boxSizing: 'border-box',
-                  marginTop: 0, // reset form margin
-                  justifyContent: 'flex-start',
-                }}
-              >
-                {/* Amazon Knowledge Base Toggle */}
+              <div style={{
+                padding: '16px 20px 20px',
+                background: '#ffffff',
+                borderTop: '1px solid #e5e7eb',
+                position: 'relative',
+              }}>
+                {/* Mode Toggles - Separate individual toggles */}
                 <div style={{
-                  padding: '8px 18px 0px 0px',
                   display: 'flex',
                   alignItems: 'center',
+                  gap: '8px',
+                  marginBottom: '12px',
                 }}>
+                  {/* Agent Mode Toggle */}
                   <button
+                    type="button"
+                    onClick={() => setMultiAgentMode(!multiAgentMode)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '8px 12px',
+                      borderRadius: '8px',
+                      border: multiAgentMode ? '1px solid #fad600' : '1px solid #e2e8f0',
+                      background: multiAgentMode ? '#fad600' : '#ffffff',
+                      color: multiAgentMode ? '#18181b' : '#64748b',
+                      fontSize: '13px',
+                      fontWeight: 500,
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease',
+                      boxShadow: multiAgentMode ? '0 1px 3px rgba(250, 214, 0, 0.3)' : '0 1px 2px rgba(0, 0, 0, 0.05)'
+                    }}
+                  >
+                    <Users size={16} />
+                    <span>Agent Mode</span>
+                  </button>
+
+                  {/* Amazon Knowledge Base Toggle */}
+                  <button
+                    type="button"
                     onClick={() => {
                       const newState = !amazonKnowledgeBaseEnabled;
                       setAmazonKnowledgeBaseEnabled(newState);
-                      // No need to reset Amazon states - they're now part of message data
                     }}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
                       gap: '6px',
-                      padding: '6px 12px',
-                      borderRadius: '6px',
-                      border: '1px solid #e5e7eb',
-                      background: amazonKnowledgeBaseEnabled ? '#000' : '#fff',
-                      color: amazonKnowledgeBaseEnabled ? '#fff' : '#374151',
-                      fontSize: '12px',
+                      padding: '8px 12px',
+                      borderRadius: '8px',
+                      border: amazonKnowledgeBaseEnabled ? '1px solid #000' : '1px solid #e2e8f0',
+                      background: amazonKnowledgeBaseEnabled ? '#000' : '#ffffff',
+                      color: amazonKnowledgeBaseEnabled ? '#fff' : '#64748b',
+                      fontSize: '13px',
                       fontWeight: 500,
                       cursor: 'pointer',
-                      transition: 'all 0.2s',
+                      transition: 'all 0.2s ease',
+                      boxShadow: amazonKnowledgeBaseEnabled ? '0 1px 3px rgba(0, 0, 0, 0.3)' : '0 1px 2px rgba(0, 0, 0, 0.05)'
                     }}
                   >
-                    <img 
-                      src={amazonKnowledgeBaseEnabled ? "/images/amazonlogoinverse.png" : "/images/amazonlogo.png"}
-                      alt="Amazon" 
-                      style={{ 
-                        width: '16px', 
-                        height: '16px'
-                      }} 
-                    />
-                    {isSearchingProducts ? 'Searching...' : 'Amazon Knowledge Base'}
+                    <ShoppingBag size={16} />
+                    <span>{isSearchingProducts ? 'Searching...' : 'Amazon'}</span>
                   </button>
+
+                  {/* Status Indicator */}
+                  <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    {multiAgentMode && (
+                      <div style={{
+                        width: '8px',
+                        height: '8px',
+                        borderRadius: '50%',
+                        background: '#fad600',
+                        animation: 'pulse 2s infinite'
+                      }} />
+                    )}
+                    {amazonKnowledgeBaseEnabled && (
+                      <div style={{
+                        width: '8px',
+                        height: '8px',
+                        borderRadius: '50%',
+                        background: '#000'
+                      }} />
+                    )}
+                  </div>
                 </div>
-                
-                <textarea
-                  value={chatInput}
-                  onChange={e => setChatInput(e.target.value)}
-                  placeholder={multiAgentMode 
-                    ? "Ask complex design questions - I'll use multiple AI agents to create your perfect room..." 
-                    : "Ask about your room design..."}
-                  style={{
-                    width: '100%',
-                    height: '75%',
-                    minHeight: '120px',
-                    maxHeight: '300px',
-                    borderRadius: 0,
-                    border: '1.5px solid #e5e7eb',
-                    fontSize: '12px',
-                    outline: 'none',
-                    background: '#f9fafb',
-                    color: '#222',
-                    boxShadow: 'none',
-                    transition: 'border-color 0.15s, box-shadow 0.15s',
-                    resize: 'vertical',
-                    padding: '18px',
-                    marginTop: 10, // move textarea down
-                    marginBottom: 0,
-                    lineHeight: 1.7,
-                  }}
-                  onFocus={e => {
-                    e.target.style.borderColor = '#facc15';
-                    e.target.style.boxShadow = '0 0 0 2px rgba(250,204,21,0.15)';
-                  }}
-                  onBlur={e => {
-                    e.target.style.borderColor = '#e5e7eb';
-                    e.target.style.boxShadow = 'none';
-                  }}
-                  disabled={isLoading}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      handleChatSubmit(e);
-                    }
-                  }}
+
+                {/* Input Container */}
+                <ChatInputBar
+                  ref={chatInputBarRef}
+                  isLoading={isLoading}
+                  multiAgentMode={multiAgentMode}
+                  onSubmit={(text) => handleChatSubmit(null, text)}
                 />
-                
-                {/* Multi-Agent Toggle */}
-                <div style={{ display: 'flex', alignItems: 'center', marginTop: 8, marginBottom: 5 }}>
-                  <button
-                    type="button"
-                    onClick={() => setMultiAgentMode(!multiAgentMode)}
-                    style={{
-                      padding: '6px 12px',
-                      borderRadius: 20,
-                      border: multiAgentMode ? '2px solid #fad600' : '2px solid #e5e7eb',
-                      background: multiAgentMode ? '#fad600' : '#fff',
-                      color: multiAgentMode ? '#18181b' : '#666',
-                      fontSize: 11,
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                      transition: 'all 0.15s',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 4
-                    }}
-                  >
-                    🤖 Multi-Agent {multiAgentMode ? 'ON' : 'OFF'}
-                  </button>
-                  {multiAgentMode && (
-                    <span style={{
-                      marginLeft: 8,
-                      fontSize: 10,
-                      color: '#666',
-                      fontStyle: 'italic'
-                    }}>
-                      AI agents will collaborate to design your room
-                    </span>
-                  )}
-                </div>
-                
-                <button
-                  type="submit"
-                  disabled={isLoading || !chatInput.trim()}
-                  style={{
-                    width: '100%',
-                    marginTop: 5,
-                    padding: '10px 0', // less height
-                    background: isLoading || !chatInput.trim()
-                      ? '#f3e8a1'
-                      : '#fad600',
-                    color: isLoading || !chatInput.trim() ? '#bdbdbd' : '#18181b',
-                    border: 'none',
-                    fontWeight: 700,
-                    fontSize: 16,
-                    cursor: isLoading || !chatInput.trim() ? 'not-allowed' : 'pointer',
-                    boxShadow: isLoading || !chatInput.trim() ? 'none' : '0 2px 8px #facc1422',
-                    transition: 'background 0.15s, color 0.15s',
-                  }}
-                >
-                  Send
-                </button>
-              </form>
+              </div>
             </div>
           )}
         </div>
@@ -4890,5 +6187,7 @@ function InsideControls({ insideActive, insidePos, setInsidePos, roomDims, insid
   }, [insideActive, roomDims.x, roomDims.z, camera, setInsidePos, insideKeys]);
   return null;
 }
+
+// (A duplicate definition of ChatInputBar existed near the bottom; removed to avoid redeclare errors)
 
 

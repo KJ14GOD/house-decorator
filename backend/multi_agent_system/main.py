@@ -11,6 +11,10 @@ import os
 # Import our simple agents system
 from simple_agents import app as workflow_app, DesignRequest, DesignResponse, stream_workflow
 
+# Import memory system
+from memory import ChatLearning, MemoryRetrieval
+from memory import MemoryActionOps
+
 # Load environment variables
 load_dotenv()
 
@@ -47,6 +51,18 @@ async def multi_agent_design(request: DesignRequest):
         # Convert room_state to dict for the workflow
         room_dict = request.room_state.dict()
         
+        # 🧠 Get user's memory context for relevant queries
+        memory_context = ''
+        user_id = request.userId
+        if user_id:
+            try:
+                memory_context = MemoryRetrieval.get_memory_aware_context(user_id, request.user_input)
+                if memory_context:
+                    print(f'🧠 Using memory context for query: "{request.user_input}"')
+                    print(f'🧠 Memory context: {memory_context}')
+            except Exception as error:
+                print(f'Error retrieving memory context: {error}')
+        
         # Initialize state for the workflow
         initial_state = {
             "user_query": request.user_input,
@@ -62,7 +78,8 @@ async def multi_agent_design(request: DesignRequest):
             "complexity": "simple", 
             "current_agent_index": 0,
             "agents_completed": [],
-            "reasoning_trace": []
+            "reasoning_trace": [],
+            "memory_context": memory_context  # Add memory context to state
         }
         
         # Run the simple multi-agent workflow
@@ -179,6 +196,13 @@ async def multi_agent_design(request: DesignRequest):
                 reasoning = trace.get('reasoning', 'N/A')
                 reasoning_summary.append(f"  {i}. [{agent}] {step}: {reasoning}")
         
+        # 🧠 Learn preferences from chat message
+        if user_id:
+            try:
+                ChatLearning.learn_from_chat(user_id, request.user_input)
+            except Exception as error:
+                print(f'Preference learning failed: {error}')
+        
         return DesignResponse(
             message=result.get("final_message", "Multi-agent design process completed successfully"),
             actions=actions,
@@ -193,7 +217,29 @@ async def multi_agent_design(request: DesignRequest):
 @app.post("/multi-agent-design-stream")
 async def multi_agent_design_stream(request: DesignRequest):
     """Stream ReAct-style reasoning and actions as JSON lines."""
+    print('testing multi')
     try:
+        # 🧠 Get user's memory context for relevant queries
+        memory_context = ''
+        user_id = request.userId
+        print(f'🧠 User ID: {user_id}')
+        if user_id:
+            try:
+                memory_context = MemoryRetrieval.get_memory_aware_context(user_id, request.user_input)
+                if memory_context:
+                    print(f'🧠 Using memory context for streaming query: "{request.user_input}"')
+                    print(f'🧠 Memory context: {memory_context}')
+            except Exception as error:
+                print(f'Error retrieving memory context: {error}')
+        
+        # Start a Session for this run if we have a user
+        session_id = None
+        if user_id:
+            try:
+                session_id = MemoryActionOps.start_session(user_id)
+            except Exception as e:
+                print(f"Failed to start session: {e}")
+
         initial_state = {
             "user_query": request.user_input,
             "room_state": request.room_state.dict(),
@@ -210,6 +256,9 @@ async def multi_agent_design_stream(request: DesignRequest):
             "agents_completed": [],
             "reasoning_trace": [],
             "user_intent": {},
+            "memory_context": memory_context,  # Add memory context to state
+            "user_id": user_id,
+            "session_id": session_id
         }
 
         import json
@@ -217,6 +266,13 @@ async def multi_agent_design_stream(request: DesignRequest):
         def generator():
             for event in stream_workflow(initial_state):
                 yield json.dumps(event) + "\n"
+
+        # 🧠 Learn preferences from chat message (after processing)
+        if user_id:
+            try:
+                ChatLearning.learn_from_chat(user_id, request.user_input)
+            except Exception as error:
+                print(f'Preference learning failed: {error}')
 
         return StreamingResponse(generator(), media_type="application/json")
     except Exception as e:

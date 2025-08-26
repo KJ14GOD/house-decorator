@@ -11,3 +11,6 @@ requests==2.32.3
 colorama==0.4.6
 numpy>=1.26.0
 python-multipart==0.0.20
+neo4j==5.15.0
+openai==1.35.0
+httpx<0.28

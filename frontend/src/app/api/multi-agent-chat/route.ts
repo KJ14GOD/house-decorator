@@ -37,6 +37,7 @@ export async function POST(req: NextRequest) {
           color: block.color,
         })),
       },
+      userId: userId,  // Add userId to the multi-agent request
       conversation_history: [],
       user_preferences: userPreferences || {},
     };

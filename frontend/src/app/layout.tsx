@@ -30,7 +30,6 @@ export default function RootLayout({
           fontFamily: "Inter, system-ui, -apple-system, sans-serif",
           minHeight: "100vh",
           position: 'relative',
-          overflow: 'hidden'
         }}
         className={inter.className}
       >
