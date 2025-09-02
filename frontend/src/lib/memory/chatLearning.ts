@@ -2,9 +2,14 @@ import OpenAI from 'openai';
 import { MemoryNodeOperations, MemoryRelationshipOperations } from './operations';
 import { PreferenceEvolution } from './preferenceEvolution';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+// Lazy OpenAI client initialization
+function getOpenAIClient() {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY environment variable is required');
+  }
+  return new OpenAI({ apiKey });
+}
 
 interface ExtractedPreference {
   type: 'like' | 'dislike';
@@ -44,7 +49,7 @@ export class ChatLearning {
     `;
 
     try {
-      const response = await openai.chat.completions.create({
+      const response = await getOpenAIClient().chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [{ role: 'user', content: prompt }],
         max_tokens: 300,

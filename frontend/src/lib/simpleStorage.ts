@@ -1,9 +1,14 @@
 import { Pinecone } from '@pinecone-database/pinecone';
 import OpenAI from 'openai';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+// Lazy OpenAI client initialization
+function getOpenAIClient() {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY environment variable is required');
+  }
+  return new OpenAI({ apiKey });
+}
 
 // Store individual message (legacy function - for backward compatibility)
 export async function storeInPinecone(userId: string, message: string) {
@@ -39,7 +44,7 @@ export async function storeInPinecone(userId: string, message: string) {
 
   const index = pc.index(indexName);
   const messageId = `msg_${userId}_${Date.now()}`;
-  const embedding = await openai.embeddings.create({
+  const embedding = await getOpenAIClient().embeddings.create({
     model: "text-embedding-3-small",
     input: message.trim(),
     dimensions: 1024, 
@@ -92,7 +97,7 @@ export async function storeConversationPair(userId: string, userPrompt: string, 
   const conversationId = `${Date.now()}`;
   
   // Use the AI response for embedding since that's usually what we want to search
-  const embedding = await openai.embeddings.create({
+  const embedding = await getOpenAIClient().embeddings.create({
     model: "text-embedding-3-small",
     input: aiResponse.trim(),
     dimensions: 1024, 
