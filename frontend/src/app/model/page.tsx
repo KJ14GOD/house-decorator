@@ -1055,7 +1055,34 @@ export default function ModelPage() {
   const [showPinboardSearch, setShowPinboardSearch] = useState(false);
   const [pinboards, setPinboards] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedPinboards, setSelectedPinboards] = useState<Array<{id: string, name: string, context: string}>>([]);
+  const [selectedPinboards, setSelectedPinboards] = useState<Array<{
+    id: string, 
+    name: string, 
+    context: string,
+    notes?: Array<{id: string, text: string}>,
+    images?: Array<{
+      id: string,
+      srcType: 'data-url' | 'url' | 'unknown',
+      src?: string,
+      left: number,
+      top: number,
+      scaleX: number,
+      scaleY: number,
+      angle: number,
+      description?: string
+    }>,
+    drawings?: Array<{
+      id: string,
+      path?: string,
+      left: number,
+      top: number,
+      stroke: string,
+      strokeWidth: number,
+      description?: string
+    }>,
+    totalImages?: number,
+    totalDrawings?: number
+  }>>([]);
   // One-row chip bar with +N overflow; Agent Mode wraps below when needed
   const chipsRowRef = useRef<HTMLDivElement | null>(null);
   const [maxChipsRow, setMaxChipsRow] = useState<number>(6);
@@ -2096,7 +2123,42 @@ Your role is to ground creative ideas in practical reality while supporting the 
 
       if (response.ok) {
         const notesData = await response.json();
-        const contextText = notesData.summary || 'No notes found in this pinboard';
+        
+        // Create enhanced context with image information
+        let contextText = '';
+        
+        if (notesData.notes && notesData.notes.length > 0) {
+          contextText += `Notes: ${notesData.notes.map((n: any) => n.text).join(', ')}`;
+        }
+        
+        if (notesData.images && notesData.images.length > 0) {
+          const imageDescriptions = notesData.images.map((img: any) => {
+            const description = img.description || 'Image present';
+            const position = `at (${Math.round(img.left)}, ${Math.round(img.top)})`;
+            const scale = img.scaleX !== 1 || img.scaleY !== 1 ? ` scaled ${img.scaleX}x${img.scaleY}` : '';
+            const rotation = img.angle ? ` rotated ${Math.round(img.angle)}°` : '';
+            return `${description} ${position}${scale}${rotation}`;
+          }).join(', ');
+          
+          if (contextText) contextText += ' | ';
+          contextText += `Images: ${imageDescriptions}`;
+        }
+        
+        if (notesData.drawings && notesData.drawings.length > 0) {
+          const drawingDescriptions = notesData.drawings.map((drawing: any) => {
+            const description = drawing.description || 'Hand-drawn sketch';
+            const position = `at (${Math.round(drawing.left)}, ${Math.round(drawing.top)})`;
+            const strokeInfo = drawing.stroke !== '#111111' ? ` in ${drawing.stroke}` : '';
+            return `${description} ${position}${strokeInfo}`;
+          }).join(', ');
+          
+          if (contextText) contextText += ' | ';
+          contextText += `Drawings: ${drawingDescriptions}`;
+        }
+        
+        if (!contextText) {
+          contextText = 'Empty pinboard';
+        }
         
         // Add to selected pinboards (Cursor-style)
         setSelectedPinboards(prev => {
@@ -2107,7 +2169,12 @@ Your role is to ground creative ideas in practical reality while supporting the 
           return [...prev, {
             id: pinboard.id,
             name: pinboard.name,
-            context: contextText
+            context: contextText,
+            notes: notesData.notes || [],
+            images: notesData.images || [],
+            drawings: notesData.drawings || [],
+            totalImages: notesData.totalImages || 0,
+            totalDrawings: notesData.totalDrawings || 0
           }];
         });
         

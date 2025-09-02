@@ -46,15 +46,86 @@ export async function POST(request: Request) {
 
     console.log("Filtered notes:", extractedNotes);
 
-    // Create summary text
+    // Extract and analyze images
+    const images = Array.isArray(pinboardData?.pinboard?.images) ? pinboardData.pinboard.images : [];
+    const extractedImages = await Promise.all(images.map(async (img: any) => {
+      const isDataUrl = typeof img?.src === 'string' ? img.src.startsWith('data:') : false;
+      
+      let description = 'Image present';
+      
+      // Analyze image content if it's a data URL
+      if (isDataUrl && img.src) {
+        try {
+          // Use OpenAI Vision to analyze the image
+          const response = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              model: 'gpt-4o-mini',
+              messages: [
+                {
+                  role: 'user',
+                  content: [
+                    {
+                      type: 'text',
+                      text: 'Describe this image in 1-2 sentences, focusing on objects, colors, style, and any design elements relevant for interior decorating.'
+                    },
+                    {
+                      type: 'image_url',
+                      image_url: {
+                        url: img.src
+                      }
+                    }
+                  ]
+                }
+              ],
+              max_tokens: 150
+            })
+          });
+
+          if (response.ok) {
+            const result = await response.json();
+            description = result.choices[0]?.message?.content || 'Image present';
+          }
+        } catch (error) {
+          console.error('Error analyzing image:', error);
+        }
+      }
+      
+      return {
+        id: img?.id,
+        srcType: isDataUrl ? 'data-url' : (img?.src ? 'url' : 'unknown'),
+        src: isDataUrl ? undefined : img?.src,
+        left: img?.left ?? 0,
+        top: img?.top ?? 0,
+        scaleX: img?.scaleX ?? 1,
+        scaleY: img?.scaleY ?? 1,
+        angle: img?.angle ?? 0,
+        description: description
+      };
+    }));
+
+    // Create summary text including image descriptions
     const allNotesText = extractedNotes.map((note: any) => note.text).join(" | ");
+    const imageDescriptions = extractedImages
+      .map((img: any) => `${img.description}`)
+      .join(" | ");
+    
+    const imagesSummary = extractedImages.length > 0
+      ? `Images: ${imageDescriptions}`
+      : `Images: 0`;
 
     return NextResponse.json({
       success: true,
       pinboardId,
       notes: extractedNotes,
-      summary: allNotesText,
-      totalNotes: extractedNotes.length
+      images: extractedImages,
+      summary: allNotesText ? `${allNotesText} || ${imagesSummary}` : imagesSummary,
+      totalNotes: extractedNotes.length,
+      totalImages: extractedImages.length
     });
 
   } catch (error) {
@@ -68,3 +139,4 @@ export async function POST(request: Request) {
     );
   }
 }
+
