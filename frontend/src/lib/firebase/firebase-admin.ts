@@ -1,6 +1,10 @@
 import * as admin from 'firebase-admin';
 
-if (!admin.apps.length) {
+function initializeFirebaseAdmin() {
+  if (admin.apps.length > 0) {
+    return admin;
+  }
+
   const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
   const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n');
@@ -21,6 +25,16 @@ if (!admin.apps.length) {
       privateKey: privateKey,
     }),
   });
+
+  return admin;
 }
 
-export default admin;
+// Create a proxy object that initializes Firebase Admin only when accessed
+const firebaseAdmin = new Proxy({} as typeof admin, {
+  get(target, prop) {
+    const initializedAdmin = initializeFirebaseAdmin();
+    return (initializedAdmin as any)[prop];
+  }
+});
+
+export default firebaseAdmin;
