@@ -16,9 +16,9 @@ if (!admin.apps.length) {
 
   admin.initializeApp({
     credential: admin.credential.cert({
-      project_id: projectId,
-      client_email: clientEmail,
-      private_key: privateKey,
+      projectId: projectId,
+      clientEmail: clientEmail,
+      privateKey: privateKey,
     }),
   });
 }
