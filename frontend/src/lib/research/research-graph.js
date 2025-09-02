@@ -14,19 +14,7 @@ const configuration = {
   enable_multi_angle_research: true, // Multiple research approaches
 };
 
-// Initialize Tavily search tool - REQUIRED for real research
-console.log(' Checking Tavily API key availability...');
-if (!process.env.TAVILY_API_KEY) {
-  console.error(' TAVILY_API_KEY not found in process.env');
-  throw new Error('TAVILY_API_KEY environment variable is required for LangGraph research');
-}
-console.log(' Tavily API key found, initializing search tool...');
-
-const tavilySearch = new TavilySearchResults({
-  maxResults: 8, // More results for deeper research
-  apiKey: process.env.TAVILY_API_KEY,
-});
-console.log(' Tavily search tool initialized successfully');
+// Tavily search tool will be initialized lazily in createResearchGraph
 
 // Schemas for structured output
 const SearchQueryList = z.object({
@@ -875,6 +863,20 @@ function evaluateResearch(state) {
 
 // Create the research graph - Enhanced for comprehensive research
 function createResearchGraph() {
+  // Initialize Tavily search tool - REQUIRED for real research
+  console.log(' Checking Tavily API key availability...');
+  if (!process.env.TAVILY_API_KEY) {
+    console.error(' TAVILY_API_KEY not found in process.env');
+    throw new Error('TAVILY_API_KEY environment variable is required for LangGraph research');
+  }
+  console.log(' Tavily API key found, initializing search tool...');
+
+  const tavilySearch = new TavilySearchResults({
+    maxResults: 8, // More results for deeper research
+    apiKey: process.env.TAVILY_API_KEY,
+  });
+  console.log(' Tavily search tool initialized successfully');
+
   const workflow = new StateGraph({
     channels: {
       messages: {
