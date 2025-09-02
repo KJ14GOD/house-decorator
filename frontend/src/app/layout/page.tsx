@@ -21,7 +21,10 @@ function GLBModelPreview({ block, scale, roomWidth, roomLength }: {
   console.log('Loading GLB model for thumbnail:', block.modelPath, 'for block:', block.name);
   const gltfResult = useGLTF(block.modelPath);
   console.log('GLTF result:', gltfResult);
-  const { scene } = gltfResult;
+  
+  // Handle both single GLTF object and array of GLTF objects
+  const gltf = Array.isArray(gltfResult) ? gltfResult[0] : gltfResult;
+  const { scene } = gltf;
   console.log('GLB model loaded successfully for thumbnail:', block.modelPath);
   
   // Clone the scene to avoid reusing the same instance

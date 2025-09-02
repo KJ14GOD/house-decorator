@@ -434,16 +434,11 @@ export default function Jamboard() {
       fabricCanvas.freeDrawingBrush = brush;
       console.log("Pencil brush configured:", brush);
     } else if (isErase) {
-      const EB = (fabricNS as any).EraserBrush;
-      if (EB) {
-        const ebrush = new EB(fabricCanvas);
-        ebrush.width = 12;
-        fabricCanvas.freeDrawingBrush = ebrush;
-        console.log("Eraser brush configured:", ebrush);
-      } else {
-        fabricCanvas.isDrawingMode = false;
-        console.log("EraserBrush not available");
-      }
+      // EraserBrush is not available in this Fabric.js version
+      // Instead, disable drawing mode and use selection mode for erasing
+      fabricCanvas.isDrawingMode = false;
+      fabricCanvas.selection = true;
+      console.log("Eraser mode: use selection to delete objects");
     }
   }, [activeTool, fabricCanvas]);
 
