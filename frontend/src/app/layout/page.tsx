@@ -1129,7 +1129,7 @@ export default function LayoutPage() {
                                         </div>
                                         <ChevronRight size={18} color="#9ca3af" />
                                       </button>
-                                      <button
+                                      {/* <button
                                         onClick={() => openPinboard(room)}
                                         style={{
                                           border: '1px solid #e5e7eb',
@@ -1142,7 +1142,7 @@ export default function LayoutPage() {
                                         }}
                                       >
                                         Pinboard
-                                      </button>
+                                      </button> */}
                                     </div>
                                   ))}
                                  </div>
@@ -1721,7 +1721,7 @@ export default function LayoutPage() {
                     Loading preview...
                   </div>
                 }>
-                                  <Canvas 
+                <Canvas 
                   key={`${model.id}-${sortBy}`} 
                   camera={{ 
                     position: [0, Math.max(3, Math.max(model.width || 12, model.length || 12) * 0.6), 0], 
@@ -1805,7 +1805,7 @@ export default function LayoutPage() {
                     </p>
                   </div>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <button
+                    {/* <button
                       onClick={(e) => { e.stopPropagation(); openPinboard(model); }}
                       style={{
                         background: '#fff',
@@ -1818,7 +1818,7 @@ export default function LayoutPage() {
                       }}
                     >
                       Pinboard
-                    </button>
+                    </button> */}
                     {model.isOwner && (
                       <>
                         <button onClick={(e) => { e.stopPropagation(); setEditingModelId(model.id); setNewModelName(model.name); }} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#6b7280' }}><Pencil size={18} /></button>

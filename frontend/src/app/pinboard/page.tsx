@@ -1,365 +1,3 @@
-// "use client";
-// import React, { useState, useRef, useEffect } from "react";
-// import { Trash2 } from "lucide-react";
-// import { useRouter, useSearchParams } from "next/navigation";
-// import { db } from "@/lib/firebase/firebase";
-// import { collection, addDoc, getDocs, doc, updateDoc, deleteDoc, getDoc } from "firebase/firestore";
-
-// interface Note {
-//   id: string;
-//   x: number;
-//   y: number;
-//   width: number;
-//   height: number;
-//   text: string;
-//   color: string;
-//   fontSize?: number;
-//   fontWeight?: string;
-//   fontStyle?: string;
-//   textDecoration?: string;
-// }
-
-// export default function PinboardPage() {
-//   const search = useSearchParams();
-//   const roomId = search.get("roomId") || "";
-//   const [notes, setNotes] = useState<Note[]>([]);
-//   const [isLoaded, setIsLoaded] = useState(false);
-
-//   const [textSaveTimeout, setTextSaveTimeout] = useState<NodeJS.Timeout | null>(null);
-//   const [selectedId, setSelectedId] = useState<string | null>(null);
-//   const [showFormatToolbar, setShowFormatToolbar] = useState<boolean>(false);
-//   const [drag, setDrag] = useState<{ id: string; offsetX: number; offsetY: number } | null>(null);
-//   const [resize, setResize] = useState<{ id: string; startX: number; startY: number; startW: number; startH: number } | null>(null);
-//   const boardRef = useRef<HTMLDivElement>(null);
-//   const [boardHeight, setBoardHeight] = useState<number>(1200);
-
-//   const loadFromFirestore = async () => {
-//     if (!roomId || isLoaded) return;
-//     try {
-//       const roomRef = doc(db, "rooms", roomId);
-//       const roomDoc = await getDoc(roomRef);
-//       if (roomDoc.exists()) {
-//         const data = roomDoc.data();
-//         if (data.pinboard?.notes) {
-//           setNotes(data.pinboard.notes);
-//         }
-//       }
-//       setIsLoaded(true);
-//     } catch (error) {
-//       console.error("Error loading pinboard:", error);
-//       setIsLoaded(true);
-//     }
-//   };
-
-//   // Auto-load data when component mounts
-//   if (!isLoaded && roomId) {
-//     loadFromFirestore();
-//   }
-
-//   const addNote = async () => {
-//     // Auto-load data if not loaded yet
-//     if (!isLoaded) {
-//       await loadFromFirestore();
-//     }
-    
-//     const screenCenterX = window.innerWidth / 2;
-//     const screenCenterY = window.innerHeight / 2;
-    
-//     // Convert screen center to board coordinates
-//     let x = screenCenterX - 110; // Center the 220px wide note
-//     let y = screenCenterY - 80;  // Center the 160px tall note
-    
-//     if (boardRef.current) {
-//       const rect = boardRef.current.getBoundingClientRect();
-//       x = screenCenterX - rect.left - 125; // Adjust for board position
-//       y = screenCenterY - rect.top - 125;   // Adjust for board position
-//     }
-    
-//     const id = `note_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
-//     const newNote = { 
-//       id, x, y, width: 250, height: 250, text: "", color: "#FEF9C3",
-//       fontSize: 16, fontWeight: "normal", fontStyle: "normal", textDecoration: "none"
-//     };
-//     const newNotes = [...notes, newNote];
-    
-//     setNotes(newNotes);
-//     setSelectedId(id);
-    
-//     // Auto-save to Firestore
-//     await saveToFirestore(newNotes);
-//   };
-
-//   const colors = ["#FEF9C3", "#E0F2FE", "#FCE7F3", "#DCFCE7", "#F1F5F9"];
-
-//   const onMouseDownItem = (e: React.MouseEvent, id: string) => {
-//     if (!boardRef.current) return;
-//     const rect = boardRef.current.getBoundingClientRect();
-//     const x = e.clientX - rect.left;
-//     const y = e.clientY - rect.top;
-//     const n = notes.find(n => n.id === id);
-//     if (!n) return;
-//     setDrag({ id, offsetX: x - n.x, offsetY: y - n.y });
-//     try { (document.body as any).style.userSelect = 'none'; } catch {}
-//   };
-
-//   const onMouseMove = (e: React.MouseEvent) => {
-//     if (!boardRef.current) return;
-//     const rect = boardRef.current.getBoundingClientRect();
-//     if (drag) {
-//       const x = e.clientX - rect.left - drag.offsetX;
-//       const y = e.clientY - rect.top - drag.offsetY;
-//       setNotes(prev => prev.map(n => n.id === drag.id ? { ...n, x, y } : n));
-//       if (y + 300 > boardHeight) setBoardHeight(y + 600);
-//     }
-//     if (resize) {
-//       const dx = e.clientX - rect.left - resize.startX;
-//       const dy = e.clientY - rect.top - resize.startY;
-//       setNotes(prev => prev.map(n => n.id === resize.id ? { ...n, width: Math.max(140, resize.startW + dx), height: Math.max(100, resize.startH + dy) } : n));
-//     }
-//   };
-
-//   const onMouseUp = async () => { 
-//     setDrag(null); 
-//     setResize(null); 
-//     try { (document.body as any).style.userSelect = ''; } catch {} 
-//     // Auto-save when dragging/resizing ends
-//     if (isLoaded) {
-//       await saveToFirestore(notes);
-//     }
-//   };
-
-//   const saveToFirestore = async (notesToSave: Note[]) => {
-//     if (!roomId) return;
-//     try {
-//       const roomRef = doc(db, "rooms", roomId);
-//       await updateDoc(roomRef, {
-//         pinboard: { notes: notesToSave }
-//       });
-//     } catch (error) {
-//       console.error("Error saving pinboard:", error);
-//     }
-//   };
-
-
-//   return (
-//     <div style={{ height: "100vh", background: "#f5f5f5", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-//       <div className="pointer-events-none fixed inset-x-0 bottom-6 flex justify-center" 
-//         ref={boardRef}
-//         onMouseMove={onMouseMove}
-//         onMouseUp={onMouseUp}
-//         style={{ 
-//           position: "relative", 
-//           flex: 1, 
-//           width: "100%",
-//           height: "100%",
-//           background: '#fafafa',
-//           backgroundImage: 'radial-gradient(#d1d1d1 1px, transparent 1px)',
-//           backgroundSize: '16px 16px',
-//           userSelect: resize ? 'none' as const : 'auto' 
-//         }}>
-//         {notes.map((n) => (
-//           <div key={n.id} style={{ position: "absolute", left: n.x, top: n.y, width: n.width, boxShadow: selectedId === n.id ? "0 4px 10px rgba(0,0,0,0.1)" : "0 2px 6px rgba(0,0,0,0.06)", border: "1px solid #e5e7eb", borderRadius: 8, background: n.color }}>
-//             <div onMouseDown={(e) => onMouseDownItem(e, n.id)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 8px", borderBottom: "1px solid #e5e7eb", cursor: "move" }}>
-//               <div style={{ display: "flex", gap: 6 }}>
-//                 {colors.map(c => (
-//                   <button key={c} onClick={async () => {
-//                     const updatedNotes = notes.map(x => x.id === n.id ? { ...x, color: c } : x);
-//                     setNotes(updatedNotes);
-//                     if (isLoaded) await saveToFirestore(updatedNotes);
-//                   }} style={{ width: 14, height: 14, borderRadius: 4, border: "1px solid #cbd5e1", background: c }} />
-//                 ))}
-//               </div>
-//               <button onClick={async () => {
-//                 const updatedNotes = notes.filter(x => x.id !== n.id);
-//                 setNotes(updatedNotes);
-//                 if (isLoaded) await saveToFirestore(updatedNotes);
-//               }} aria-label="Delete note" style={{ border: "none", background: "transparent", color: "#64748b", padding: 4, display: 'flex', alignItems: 'center' }}>
-//                 <Trash2 size={16} />
-//               </button>
-//             </div>
-//             <textarea 
-//               value={n.text} 
-//               onFocus={() => {
-//                 setSelectedId(n.id);
-//                 setShowFormatToolbar(true);
-//               }}
-//               onBlur={() => {
-//                 setTimeout(() => setShowFormatToolbar(false), 200);
-//               }}
-//               onChange={e => {
-//                 const updatedNotes = notes.map(x => x.id === n.id ? { ...x, text: e.target.value } : x);
-//                 setNotes(updatedNotes);
-                
-//                 // Debounced save - wait 1 second after user stops typing
-//                 if (textSaveTimeout) clearTimeout(textSaveTimeout);
-//                 const timeout = setTimeout(async () => {
-//                   if (isLoaded) await saveToFirestore(updatedNotes);
-//                 }, 1000);
-//                 setTextSaveTimeout(timeout);
-//               }} 
-//               style={{ 
-//                 width: "100%", 
-//                 height: Math.max(60, n.height - 40), 
-//                 resize: "none", 
-//                 padding: 10, 
-//                 border: "none", 
-//                 outline: "none", 
-//                 background: "transparent", 
-//                 fontSize: n.fontSize || 16,
-//                 fontWeight: n.fontWeight || "normal",
-//                 fontStyle: n.fontStyle || "normal", 
-//                 textDecoration: n.textDecoration || "none",
-//                 color: "#111827", 
-//                 lineHeight: "1.6" 
-//               }} 
-//               placeholder="Write your idea..." 
-//             />
-//             <div onMouseDown={(e) => { e.stopPropagation(); if (!boardRef.current) return; const rect = boardRef.current.getBoundingClientRect(); setResize({ id: n.id, startX: e.clientX - rect.left, startY: e.clientY - rect.top, startW: n.width, startH: n.height }); try { (document.body as any).style.userSelect = 'none'; } catch {} }} style={{ position: 'absolute', right: 0, bottom: 0, width: 24, height: 24, cursor: 'nwse-resize' }} />
-//           </div>
-//         ))}
-
-//         {/* Floating format toolbar */}
-//         {showFormatToolbar && selectedId && (() => {
-//           const selectedNote = notes.find(n => n.id === selectedId);
-//           if (!selectedNote) return null;
-          
-//           const isNearTop = selectedNote.y < 80;
-//           const toolbarY = isNearTop ? selectedNote.y + selectedNote.height + 10 : selectedNote.y - 60;
-          
-//           return (
-//             <div style={{
-//               position: 'absolute',
-//               left: selectedNote.x,
-//               top: toolbarY,
-//               zIndex: 100,
-//               background: '#333',
-//               borderRadius: 12,
-//               padding: '8px',
-//               display: 'flex',
-//               alignItems: 'center',
-//               gap: '4px',
-//               boxShadow: '0 8px 24px rgba(0,0,0,0.3)'
-//             }}>
-//               {/* Color picker */}
-//               <input 
-//                 type="color" 
-//                 value={selectedNote.color}
-//                 onChange={async (e) => {
-//                   const updatedNotes = notes.map(x => x.id === selectedId ? { ...x, color: e.target.value } : x);
-//                   setNotes(updatedNotes);
-//                   if (isLoaded) await saveToFirestore(updatedNotes);
-//                 }}
-//                 style={{ width: 28, height: 28, borderRadius: 6, border: 'none', cursor: 'pointer' }}
-//               />
-              
-//               {/* Font size */}
-//               <select 
-//                 value={selectedNote.fontSize || 16}
-//                 onChange={async (e) => {
-//                   const updatedNotes = notes.map(x => x.id === selectedId ? { ...x, fontSize: parseInt(e.target.value) } : x);
-//                   setNotes(updatedNotes);
-//                   if (isLoaded) await saveToFirestore(updatedNotes);
-//                 }}
-//                 style={{ 
-//                   background: '#444', color: 'white', border: 'none', borderRadius: 6, 
-//                   padding: '6px 8px', fontSize: 12, cursor: 'pointer' 
-//                 }}
-//               >
-//                 <option value={12}>12</option>
-//                 <option value={14}>14</option>
-//                 <option value={16}>16</option>
-//                 <option value={18}>18</option>
-//                 <option value={20}>20</option>
-//                 <option value={24}>24</option>
-//               </select>
-              
-//               {/* Bold */}
-//               <button 
-//                 onClick={async () => {
-//                   const newWeight = selectedNote.fontWeight === 'bold' ? 'normal' : 'bold';
-//                   const updatedNotes = notes.map(x => x.id === selectedId ? { ...x, fontWeight: newWeight } : x);
-//                   setNotes(updatedNotes);
-//                   if (isLoaded) await saveToFirestore(updatedNotes);
-//                 }}
-//                 style={{ 
-//                   background: selectedNote.fontWeight === 'bold' ? '#555' : 'transparent',
-//                   color: 'white', border: 'none', borderRadius: 6, padding: '8px', 
-//                   cursor: 'pointer', fontWeight: 'bold', fontSize: 14 
-//                 }}
-//               >B</button>
-              
-//               {/* Italic */}
-//               <button 
-//                 onClick={async () => {
-//                   const newStyle = selectedNote.fontStyle === 'italic' ? 'normal' : 'italic';
-//                   const updatedNotes = notes.map(x => x.id === selectedId ? { ...x, fontStyle: newStyle } : x);
-//                   setNotes(updatedNotes);
-//                   if (isLoaded) await saveToFirestore(updatedNotes);
-//                 }}
-//                 style={{ 
-//                   background: selectedNote.fontStyle === 'italic' ? '#555' : 'transparent',
-//                   color: 'white', border: 'none', borderRadius: 6, padding: '8px', 
-//                   cursor: 'pointer', fontStyle: 'italic', fontSize: 14 
-//                 }}
-//               >I</button>
-              
-//               {/* Underline */}
-//               <button 
-//                 onClick={async () => {
-//                   const newDecoration = selectedNote.textDecoration === 'underline' ? 'none' : 'underline';
-//                   const updatedNotes = notes.map(x => x.id === selectedId ? { ...x, textDecoration: newDecoration } : x);
-//                   setNotes(updatedNotes);
-//                   if (isLoaded) await saveToFirestore(updatedNotes);
-//                 }}
-//                 style={{ 
-//                   background: selectedNote.textDecoration === 'underline' ? '#555' : 'transparent',
-//                   color: 'white', border: 'none', borderRadius: 6, padding: '8px', 
-//                   cursor: 'pointer', textDecoration: 'underline', fontSize: 14 
-//                 }}
-//               >U</button>
-              
-//               {/* Link placeholder */}
-//               <button 
-//                 style={{ 
-//                   background: 'transparent', color: 'white', border: 'none', 
-//                   borderRadius: 6, padding: '8px', cursor: 'pointer', fontSize: 14 
-//                 }}
-//               >🔗</button>
-//             </div>
-//           );
-//         })()}
-//       </div> 
-//       <div
-//         style={{ 
-//             position: 'fixed', 
-//             bottom: 20, 
-//             left: '50%', 
-//             zIndex: 50,
-//             background: 'white',
-//             border: '1px solid #e0e0e0',
-//             borderRadius: 12,
-//             padding: '8px',
-//             boxShadow: '0 8px 24px rgba(0,0,0,0.15)'
-//       }}>
-//         <button onClick={addNote} style={{ 
-//           background: 'transparent', 
-//           color: '#333', 
-//           border: 'none', 
-//           borderRadius: 8, 
-//           padding: '10px 12px', 
-//           fontSize: 14,
-//           cursor: 'pointer',
-//           display: 'flex',
-//           alignItems: 'center',
-//           gap: '6px'
-//         }}>
-//           📝 Note
-//         </button>
-//       </div>
-//     </div>
-//   );
-// }
-
 "use client";
 import { useRef, useState, useEffect } from "react";
 import { 
@@ -369,7 +7,8 @@ import { Canvas as FabricCanvas, Rect, Textbox, Image as FabricImage, Group, Pat
 import * as fabricNS from "fabric";
 import { useSearchParams, useRouter } from "next/navigation";
 import { db } from "@/lib/firebase/firebase";
-import { doc, getDoc, updateDoc } from "firebase/firestore";
+import { doc, getDoc, setDoc, updateDoc, arrayUnion } from "firebase/firestore";
+import { useAuth } from "@/context/AuthContext";
 
 
 // Helper to read design tokens (HSL) from CSS variables and return usable CSS color strings
@@ -383,13 +22,14 @@ const TOOLBAR_HEIGHT = 88; // keep some space for a comfy fixed toolbar
 export type Tool = "select" | "hand" | "draw" | "eraser";
 
 export default function Jamboard() {
+  const { user } = useAuth();
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [fabricCanvas, setFabricCanvas] = useState<FabricCanvas | null>(null);
   const [activeTool, setActiveTool] = useState<Tool>("select");
   const isDraggingRef = useRef(false);
   const search = useSearchParams();
-  const roomId = search.get("roomId") || "";
+  const pinboardId = search.get("pinboardId") || "";
   const router = useRouter();
   const [isLoaded, setIsLoaded] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -410,6 +50,34 @@ export default function Jamboard() {
         rotatingPointOffset: 24,
       });
     } catch {}
+  };
+
+  // Function to resize note rectangle based on text content
+  const resizeNoteToText = (group: Group) => {
+    const objects = group.getObjects();
+    const rect = objects.find(obj => obj.type === 'rect') as Rect;
+    const textbox = objects.find(obj => obj.type === 'textbox') as Textbox;
+    
+    if (!rect || !textbox) return;
+    
+    // Calculate required height based on text content
+    const minHeight = 180; // Minimum note height
+    const padding = 24; // Top and bottom padding
+    const textHeight = (textbox as any).calcTextHeight?.() || (textbox as any).height || 0;
+    const requiredHeight = Math.max(minHeight, textHeight + padding);
+    
+    // Update rectangle dimensions
+    rect.set({ height: requiredHeight });
+    
+    // Keep textbox positioned at top-left of the rectangle
+    const rectWidth = rect.width || 180;
+    textbox.set({
+      left: -rectWidth / 2 + 12,
+      top: -requiredHeight / 2 + 12,
+      width: rectWidth - 24
+    });
+    
+    group.setCoords();
   };
 
   useEffect(() => {
@@ -532,6 +200,12 @@ export default function Jamboard() {
     const onTextEditingEnd = (evt: any) => {
       const tb = evt.target;
       if (tb && tb.type === 'textbox') {
+        // Find the parent group
+        let group = tb.group;
+        if (group && group.type === 'group' && (group as any).data?.type === 'note') {
+          resizeNoteToText(group as Group);
+        }
+        
         if (!tb.text || tb.text.trim() === '') {
           // Restore placeholder if text is empty
           (tb as any)._isPlaceholder = true;
@@ -544,30 +218,56 @@ export default function Jamboard() {
           tb.set('fill', token('foreground') || '#111111');
         }
         
+        canvas.requestRenderAll();
         saveNotesDebounced();
       }
     };
     canvas.on('text:editing:exited', onTextEditingEnd);
     
-    // Tag drawing paths when created
-    const onPathCreated = (evt: any) => {
-      const p = evt?.path as any;
-      if (p) {
-        p.data = { type: 'drawing', id: `draw_${Date.now()}_${Math.random().toString(36).slice(2,6)}` };
-        p.erasable = true;
-        saveNotesDebounced();
+     // Handle text changes during editing for real-time resizing
+    const onTextChanged = (evt: any) => {
+      const tb = evt.target;
+      if (tb && tb.type === 'textbox') {
+        let group = tb.group;
+        if (group && group.type === 'group' && (group as any).data?.type === 'note') {
+          resizeNoteToText(group as Group);
+          canvas.requestRenderAll();
+        }
       }
     };
-    canvas.on('path:created', onPathCreated);
+    canvas.on('text:changed', onTextChanged);
+    // Tag drawing paths when created - moved to after function definition
+    const onPathCreated = (evt: any) => {
+      console.log("onPathCreated event triggered:", evt);
+      const p = evt?.path as any;
+      if (p) {
+        console.log("Path object created:", p);
+        const strokeId = `draw_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
+        p.data = { type: 'drawing', id: strokeId };
+        p.erasable = true;
+        
+        console.log("About to save stroke:", strokeId);
+        // Save stroke immediately (Figma-style)
+        if (typeof saveStrokeImmediately === 'function') {
+          saveStrokeImmediately(p, strokeId);
+        } else {
+          console.log("saveStrokeImmediately function not available yet");
+          // Fallback to debounced save
+          saveNotesDebounced();
+        }
+      } else {
+        console.log("No path object in event:", evt);
+      }
+    };
 
     setFabricCanvas(canvas);
 
     // Try loading saved notes
     const loadFromFirestore = async () => {
-      if (!roomId || isLoaded) return;
+      if (!pinboardId || isLoaded)return;
       try {
-        const roomRef = doc(db, "rooms", roomId);
-        const snap = await getDoc(roomRef);
+        const pinboardRef = doc(db, "pinboards", pinboardId);
+        const snap = await getDoc(pinboardRef);
         if (snap.exists()) {
           const data: any = snap.data();
           const saved = data?.pinboard?.notes as any[] | undefined;
@@ -597,8 +297,9 @@ export default function Jamboard() {
                 fontSize: 18,
                 fill: token('foreground') || '#111111',
                 editable: true,
-                splitByGrapheme: false, // Changed to false for proper word wrapping
+                splitByGrapheme: true, // Changed to false for proper word wrapping
                 lineHeight: 1.4,
+                dynamicMinWidth: w - 24,
               });
               
               // Set up placeholder behavior for loaded notes
@@ -641,10 +342,21 @@ export default function Jamboard() {
           if (Array.isArray(drawings)) {
             for (const d of drawings) {
               try {
-                const svg: string | undefined = d.svg;
-                if (svg && (fabricNS as any).loadSVGFromString) {
-                  // Fabric v6: promise API
-                  (fabricNS as any).loadSVGFromString(svg).then(({ objects, options }: any) => {
+                // Handle new path format (Figma-style)
+                if (d.path) {
+                  const path = new (fabricNS as any).Path(d.path, {
+                    left: d.left || 0,
+                    top: d.top || 0,
+                    stroke: d.stroke || '#111111',
+                    strokeWidth: d.strokeWidth || 3,
+                    fill: d.fill || 'transparent',
+                  });
+                  path.data = { type: 'drawing', id: d.id };
+                  path.erasable = true;
+                  canvas.add(path);
+                } else if (d.svg && (fabricNS as any).loadSVGFromString) {
+                  // Legacy SVG format support
+                  (fabricNS as any).loadSVGFromString(d.svg).then(({ objects, options }: any) => {
                     const grouped = (fabricNS as any).util.groupSVGElements(objects || [], options || {});
                     const obj = grouped || objects?.[0];
                     if (!obj) return;
@@ -691,6 +403,7 @@ export default function Jamboard() {
       canvas.off("mouse:up", onMouseUp);
       canvas.off('mouse:dblclick', onDbl);
       canvas.off('text:editing:exited', onTextEditingEnd);
+      canvas.off('text:changed', onTextChanged);
       canvas.off('path:created', onPathCreated);
       canvas.dispose();
     };
@@ -700,23 +413,36 @@ export default function Jamboard() {
   // Toggle modes based on active tool (draw/eraser)
   useEffect(() => {
     if (!fabricCanvas) return;
+    console.log("Setting up drawing mode, activeTool:", activeTool);
+    
     const isDraw = activeTool === 'draw';
     const isErase = activeTool === 'eraser';
     fabricCanvas.isDrawingMode = isDraw || isErase;
     fabricCanvas.selection = !(isDraw || isErase);
+    
+    console.log("Drawing mode settings:", {
+      isDrawingMode: fabricCanvas.isDrawingMode,
+      selection: fabricCanvas.selection,
+      isDraw,
+      isErase
+    });
+    
     if (isDraw) {
       const brush = new (fabricNS as any).PencilBrush(fabricCanvas);
       brush.width = 3;
       brush.color = token('foreground') || '#111111';
       fabricCanvas.freeDrawingBrush = brush;
+      console.log("Pencil brush configured:", brush);
     } else if (isErase) {
       const EB = (fabricNS as any).EraserBrush;
       if (EB) {
         const ebrush = new EB(fabricCanvas);
         ebrush.width = 12;
         fabricCanvas.freeDrawingBrush = ebrush;
+        console.log("Eraser brush configured:", ebrush);
       } else {
         fabricCanvas.isDrawingMode = false;
+        console.log("EraserBrush not available");
       }
     }
   }, [activeTool, fabricCanvas]);
@@ -763,9 +489,10 @@ export default function Jamboard() {
       fontSize: 18,
       fill: textColor,
       editable: true,
-      splitByGrapheme: false, // Changed to false for proper word wrapping
+      splitByGrapheme: true, // Changed to false for proper word wrapping
       cursorColor: '#111827',
       lineHeight: 1.4,
+      dynamicMinWidth: noteSize - 24,
     });
     
     // Add placeholder behavior
@@ -913,26 +640,31 @@ export default function Jamboard() {
   const serializeDrawings = (): any[] => {
     if (!fabricCanvas) return [];
     const out: any[] = [];
+    
     for (const obj of fabricCanvas.getObjects()) {
       const tag = (obj as any).data;
-      if (!tag || tag.type !== 'drawing') continue;
-      const svg = (obj as any).toSVG ? (obj as any).toSVG() : '';
-      const rec: any = {
-        id: tag.id,
-        svg,
-        left: obj.left ?? 0,
-        top: obj.top ?? 0,
-        scaleX: (obj as any).scaleX ?? 1,
-        scaleY: (obj as any).scaleY ?? 1,
-        angle: obj.angle ?? 0,
-      };
-      out.push(rec);
+      
+      // Check if it's a drawing object
+      if (tag && tag.type === 'drawing') {
+        // Use minimal path data (Figma-style)
+        const pathData = {
+          id: tag.id,
+          path: (obj as any).path || null,
+          left: obj.left || 0,
+          top: obj.top || 0,
+          stroke: (obj as any).stroke || '#111111',
+          strokeWidth: (obj as any).strokeWidth || 3,
+          fill: (obj as any).fill || 'transparent',
+        };
+        out.push(pathData);
+      }
     }
+    
     return out;
   };
 
   const saveNotes = async () => {
-    if (!fabricCanvas || !roomId || isSaving) return;
+    if (!fabricCanvas || !pinboardId || isSaving) return;
     try {
       setIsSaving(true);
       const sanitize = (o: any): any => {
@@ -947,15 +679,37 @@ export default function Jamboard() {
       const notes = sanitize(serializeNotes());
       const images = sanitize(serializeImages());
       const drawings = sanitize(serializeDrawings());
-      const roomRef = doc(db, "rooms", roomId);
-      // Save with merge-like structure to avoid invalid nested entity errors
-      await updateDoc(roomRef, {
-        'pinboard.notes': notes,
-        'pinboard.images': images,
-        'pinboard.drawings': drawings,
-      });
+      
+      // Generate thumbnail from canvas
+      let thumbnail = '';
+      try {
+        const dataURL = fabricCanvas.toDataURL({
+          format: 'jpeg',
+          quality: 0.3,
+          width: 400,
+          height: 300,
+          multiplier: 0.5
+        });
+        thumbnail = dataURL;
+      } catch (err) {
+        console.warn("Could not generate thumbnail:", err);
+      }
+      
+      const pinboardRef = doc(db, "pinboards", pinboardId);
+      // Save to standalone pinboard
+      await setDoc(pinboardRef, {
+        userId: user?.uid || 'anonymous',
+        pinboard: {
+          notes: notes,
+          images: images,
+          drawings: drawings,
+          thumbnail: thumbnail,
+        },
+        updatedAt: new Date(), // Move updatedAt to top level
+        createdAt: new Date(),
+      }, { merge: true });
     } catch (err) {
-      console.error("Save pinboard pinboard error", err);
+      console.error("Save pinboard error", err);
     } finally {
       setIsSaving(false);
     }
@@ -968,11 +722,83 @@ export default function Jamboard() {
     saveTimer = setTimeout(saveNotes, 150);
   };
 
+  // Figma-style instant stroke saving
+  const saveStrokeImmediately = async (pathObj: any, strokeId: string) => {
+    console.log("saveStrokeImmediately called with:", { pathObj, strokeId, pinboardId, user: user?.uid });
+    
+    if (!fabricCanvas || !pinboardId) {
+      console.log("Missing fabricCanvas or pinboardId:", { fabricCanvas: !!fabricCanvas, pinboardId });
+      return;
+    }
+    
+    try {
+      // Convert path to SVG string to avoid nested arrays
+      const svgString = pathObj.toSVG ? pathObj.toSVG() : '';
+      
+      // Extract minimal path data (like Figma) - no nested arrays
+      const pathData = {
+        id: strokeId,
+        svg: svgString, // Use SVG string instead of path array
+        left: pathObj.left || 0,
+        top: pathObj.top || 0,
+        stroke: pathObj.stroke || '#111111',
+        strokeWidth: pathObj.strokeWidth || 3,
+        fill: pathObj.fill || 'transparent',
+        timestamp: Date.now()
+      };
+      
+      console.log("Path data to save:", pathData);
+      
+      const pinboardRef = doc(db, "pinboards", pinboardId);
+      console.log("Pinboard reference:", pinboardRef.path);
+      
+      // Add stroke to existing drawings array
+      const updateData = {
+        [`pinboard.drawings`]: arrayUnion(pathData),
+        updatedAt: new Date(),
+      };
+      
+      console.log("Update data:", updateData);
+      
+      await updateDoc(pinboardRef, updateData);
+      
+      console.log("Stroke saved successfully to Firebase:", strokeId);
+    } catch (err) {
+      console.error("Error saving stroke:", err);
+      console.error("Error details:", {
+        error: err,
+        pinboardId,
+        user: user?.uid,
+        pathData: pathObj
+      });
+    }
+  };
+
   // Auto-save when objects move/scale
   useEffect(() => {
     if (!fabricCanvas) return;
     const handler = () => saveNotesDebounced();
     fabricCanvas.on("object:modified", handler);
+    
+    // Set up path:created event listener for instant stroke saving
+    const onPathCreated = (evt: any) => {
+      console.log("onPathCreated event triggered:", evt);
+      const p = evt?.path as any;
+      if (p) {
+        console.log("Path object created:", p);
+        const strokeId = `draw_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
+        p.data = { type: 'drawing', id: strokeId };
+        p.erasable = true;
+        
+        console.log("About to save stroke:", strokeId);
+        // Save stroke immediately (Figma-style)
+        saveStrokeImmediately(p, strokeId);
+      } else {
+        console.log("No path object in event:", evt);
+      }
+    };
+    fabricCanvas.on('path:created', onPathCreated);
+    
     // delete via Backspace/Delete
     const keyHandler = (e: KeyboardEvent) => {
       if (e.key === 'Backspace' || e.key === 'Delete') {
@@ -987,6 +813,7 @@ export default function Jamboard() {
     window.addEventListener('keydown', keyHandler);
     return () => {
       fabricCanvas.off("object:modified", handler);
+      fabricCanvas.off('path:created', onPathCreated);
       window.removeEventListener('keydown', keyHandler);
     };
   }, [fabricCanvas]);
@@ -994,30 +821,52 @@ export default function Jamboard() {
 
   return (
     <div ref={containerRef} className="relative w-full h-[calc(100vh)]">
-      {/* Back to layouts */}
-      <button
-        onClick={() => router.push('/layout')}
-        title="Back to layouts"
-        style={{
-          position: 'fixed',
-          top: 16,
-          left: 16,
-          zIndex: 60,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          width: 44,
-          height: 44,
-          borderRadius: 12,
-          border: '1px solid #e5e7eb',
-          background: 'white',
-          color: '#111827',
-          boxShadow: '0 6px 18px rgba(0,0,0,0.12)',
-          cursor: 'pointer',
-        }}
-      >
-        <ArrowLeft size={18} />
-      </button>
+      {/* Header with back button and pinboard info */}
+      <div style={{
+        position: 'fixed',
+        top: 16,
+        left: 16,
+        right: 16,
+        zIndex: 60,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 16,
+      }}>
+        <button
+          onClick={() => router.push('/board')}
+          title="Back to board"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 44,
+            height: 44,
+            borderRadius: 12,
+            border: '1px solid #e5e7eb',
+            background: 'white',
+            color: '#111827',
+            boxShadow: '0 6px 18px rgba(0,0,0,0.12)',
+            cursor: 'pointer',
+          }}
+        >
+          <ArrowLeft size={18} />
+        </button>
+        
+        {/* Pinboard ID display */}
+        {pinboardId && (
+          <div style={{
+            background: 'rgba(255,255,255,0.9)',
+            padding: '8px 16px',
+            borderRadius: '8px',
+            border: '1px solid #e5e7eb',
+            fontSize: '14px',
+            color: '#6b7280',
+            fontFamily: 'monospace',
+          }}>
+            Pinboard ID: {pinboardId}
+          </div>
+        )}
+      </div>
       {/* SEO-friendly H1 (visually hidden) */}
       <canvas ref={canvasRef} className="block w-full h-full" />
       {/* Drawing is handled directly by Fabric freeDrawingBrush; no overlay needed */}
@@ -1075,7 +924,7 @@ export default function Jamboard() {
                   <Pencil size={20} />
                 </button>
                 <button title="Eraser" onClick={() => setActiveTool("eraser" as any)} style={activeTool === ("eraser" as any) ? activeBtn : baseBtn}>
-                  <Eraser size={20} />
+                  <Eraser size={20} /> 
                 </button>
 
                 <div style={divider} />

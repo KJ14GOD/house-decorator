@@ -274,6 +274,8 @@ function renderDeepResearch(content: string) {
   );
 }
 
+
+
 export default function ChatPage() {
   const router = useRouter();
   const { user, loading } = useAuth();
@@ -1608,6 +1610,7 @@ type ChatInputBarProps = {
   useLangGraph: boolean;
   isSticky: boolean; // Add isSticky prop
 };
+
 
 function ChatInputBar({
   inputMessage,

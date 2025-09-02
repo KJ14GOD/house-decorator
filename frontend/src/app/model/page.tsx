@@ -7,9 +7,9 @@ import { Canvas, useThree, useFrame } from "@react-three/fiber";
 import { OrbitControls, Edges, PointerLockControls, Text, useGLTF, PerspectiveCamera, Environment } from "@react-three/drei";
 import * as THREE from 'three';
 import {GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { ChevronUp, ChevronDown, Pencil, RotateCcw, RotateCw, Sofa, DoorOpen, Bed, RectangleHorizontal, Armchair, Package, Archive, Utensils, ChefHat, Laptop, BookOpen, Users, ShoppingBag, Send } from 'lucide-react';
+import { ChevronUp, ChevronDown, Pencil, RotateCcw, RotateCw, Sofa, DoorOpen, Bed, RectangleHorizontal, Armchair, Package, Archive, Utensils, ChefHat, Laptop, BookOpen, Users, ShoppingBag, Send, AtSign, Search, FileText } from 'lucide-react';
 import { db } from "@/lib/firebase/firebase";
-import { doc, updateDoc, getDoc, arrayUnion, arrayRemove } from "firebase/firestore";
+import { doc, updateDoc, getDoc, arrayUnion, arrayRemove, collection, query, where, getDocs, orderBy } from "firebase/firestore";
 import { TransformControls } from "@react-three/drei";
 import ShareModal, { ShareUser, LinkSharing } from "@/components/ShareModal";
 import { useAuth } from '@/context/AuthContext';
@@ -31,12 +31,75 @@ const ChatInputBar = forwardRef(function ChatInputBar(
   ref: Ref<{ setValue: (v: string) => void; focus: () => void }>
 ) {
   const [localValue, setLocalValue] = useState('');
+  const [showPinboardSearch, setShowPinboardSearch] = useState(false);
+  const [pinboards, setPinboards] = useState<any[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const { user } = useAuth();
 
   useImperativeHandle(ref, () => ({
     setValue: (v: string) => setLocalValue(v ?? ''),
     focus: () => textareaRef.current?.focus(),
   }), []);
+
+  // Fetch user's pinboards
+  const fetchPinboards = useCallback(async () => {
+    if (!user) return;
+    
+    try {
+      const pinboardsRef = collection(db, "pinboards");
+      const q = query(
+        pinboardsRef,
+        where("userId", "==", user.uid),
+        orderBy("updatedAt", "desc")
+      );
+      const querySnapshot = await getDocs(q);
+      
+      const pinboardList: any[] = [];
+      querySnapshot.forEach((doc) => {
+        const data = doc.data();
+        const updatedAt = data.updatedAt?.toDate?.() || 
+                         data.pinboard?.updatedAt?.toDate?.() || 
+                         new Date(data.updatedAt) || 
+                         data.createdAt?.toDate?.() ||
+                         new Date();
+        
+        pinboardList.push({
+          id: doc.id,
+          name: data.name || `Pinboard #${doc.id.slice(-6)}`,
+          updatedAt: updatedAt,
+          notes: data.pinboard?.notes || [],
+          images: data.pinboard?.images || [],
+          drawings: data.pinboard?.drawings || []
+        });
+      });
+      
+      setPinboards(pinboardList);
+    } catch (error) {
+      console.error("Error fetching pinboards:", error);
+    }
+  }, [user]);
+
+  // Fetch pinboards when user changes or @ button is clicked
+  useEffect(() => {
+    if (showPinboardSearch && user) {
+      fetchPinboards();
+    }
+  }, [showPinboardSearch, user, fetchPinboards]);
+
+  // Handle @ button click
+  const handleAtButtonClick = () => {
+    setShowPinboardSearch(!showPinboardSearch);
+    setSearchQuery('');
+  };
+
+  // Add pinboard to message
+
+  // Filter pinboards based on search query
+  const filteredPinboards = pinboards.filter(pinboard =>
+    pinboard.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    pinboard.id.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   const handleKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -58,47 +121,133 @@ const ChatInputBar = forwardRef(function ChatInputBar(
   return (
     <div style={{ position: 'relative', display: 'flex', alignItems: 'flex-end', gap: '8px' }}>
       <div style={{ flex: 1, position: 'relative' }}>
-        <textarea
-          ref={textareaRef}
-          value={localValue}
-          onChange={e => setLocalValue(e.target.value)}
-          placeholder={multiAgentMode
-            ? "Ask complex design questions - I'll use multiple AI agents to create your perfect room..."
-            : "Ask about your room design..."}
-          style={{
-            width: '100%',
-            minHeight: '48px',
-            maxHeight: '150px',
-            padding: '12px 16px',
-            borderRadius: '12px',
-            border: '1.5px solid #e2e8f0',
-            fontSize: '14px',
-            outline: 'none',
-            background: '#ffffff',
-            color: '#1e293b',
-            resize: 'none',
-            fontFamily: 'inherit',
-            lineHeight: '1.5',
-            transition: 'all 0.2s ease',
-            boxSizing: 'border-box'
-          }}
-          onFocus={e => {
-            e.currentTarget.style.borderColor = '#fad600';
-            e.currentTarget.style.boxShadow = '0 0 0 3px rgba(250, 214, 0, 0.1)';
-          }}
-          onBlur={e => {
-            e.currentTarget.style.borderColor = '#e2e8f0';
-            e.currentTarget.style.boxShadow = 'none';
-          }}
-          disabled={isLoading}
-          onKeyDown={handleKeyDown}
-        />
-      </div>
+                 <textarea
+           ref={textareaRef}
+           value={localValue}
+           onChange={e => setLocalValue(e.target.value)}
+           placeholder={multiAgentMode
+             ? "Ask complex design questions - I'll use multiple AI agents to create your perfect room..."
+             : "Ask about your room design..."}
+           style={{
+             width: '100%',
+             minHeight: '48px',
+             maxHeight: '150px',
+             padding: '12px 16px',
+             borderRadius: '12px',
+             border: '1.5px solid #e2e8f0',
+             fontSize: '14px',
+             outline: 'none',
+             background: '#ffffff',
+             color: '#1e293b',
+             resize: 'none',
+             fontFamily: 'inherit',
+             lineHeight: '1.5',
+             transition: 'all 0.2s ease',
+             boxSizing: 'border-box'
+           }}
+           onFocus={e => {
+             e.currentTarget.style.borderColor = '#fad600';
+             e.currentTarget.style.boxShadow = '0 0 0 3px rgba(250, 214, 0, 0.1)';
+           }}
+           onBlur={e => {
+             e.currentTarget.style.borderColor = '#e2e8f0';
+             e.currentTarget.style.boxShadow = 'none';
+           }}
+           disabled={isLoading}
+           onKeyDown={handleKeyDown}
+         />
 
-      <button
-        type="button"
-        disabled={isLoading || localValue.trim().length === 0}
-        onClick={handleClick}
+        {/* Pinboard Search Dropdown */}
+        {showPinboardSearch && (
+          <div style={{
+            position: 'absolute',
+            top: '-320px',
+            left: '0',
+            right: '0',
+            background: '#ffffff',
+            border: '1px solid #e2e8f0',
+            borderRadius: '12px',
+            boxShadow: '0 10px 40px rgba(0, 0, 0, 0.1)',
+            maxHeight: '300px',
+            zIndex: 1000,
+            overflow: 'hidden'
+          }}>
+            {/* Search Header */}
+            <div style={{ padding: '16px', borderBottom: '1px solid #f1f5f9' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+                <Search size={16} color="#64748b" />
+                <span style={{ fontSize: '14px', fontWeight: '500', color: '#1e293b' }}>
+                  Search Pinboards
+                </span>
+              </div>
+              <input
+                type="text"
+                placeholder="Search by name..."
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '8px 12px',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: '8px',
+                  fontSize: '14px',
+                  outline: 'none'
+                }}
+              />
+            </div>
+
+            {/* Pinboard List */}
+            {/* <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+              {filteredPinboards.length === 0 ? (
+                <div style={{
+                  padding: '20px',
+                  textAlign: 'center',
+                  color: '#64748b',
+                  fontSize: '14px'
+                }}>
+                  {pinboards.length === 0 ? 'No pinboards found' : 'No matching pinboards'}
+                </div>
+              ) : (
+                filteredPinboards.map(pinboard => (
+                  <div
+                    key={pinboard.id}
+                    onClick={() => addPinboardToMessage(pinboard)}
+                    style={{
+                      padding: '12px 16px',
+                      borderBottom: '1px solid #f8fafc',
+                      cursor: 'pointer',
+                      transition: 'background-color 0.2s ease'
+                    }}
+                    onMouseEnter={e => {
+                      e.currentTarget.style.backgroundColor = '#f8fafc';
+                    }}
+                    onMouseLeave={e => {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                      <FileText size={16} color="#64748b" />
+                      <span style={{ fontSize: '14px', fontWeight: '500', color: '#1e293b' }}>
+                        {pinboard.name}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#64748b', marginLeft: '24px' }}>
+                      {pinboard.notes.length} notes • {pinboard.images.length} images • {pinboard.drawings.length} drawings
+                    </div>
+                  </div>
+                ))
+              )}
+            </div> */}
+          </div>
+        )}
+             </div>
+
+
+
+       <button
+         type="button"
+         disabled={isLoading || localValue.trim().length === 0}
+         onClick={handleClick}
         style={{
           width: '48px',
           height: '48px',
@@ -883,6 +1032,7 @@ const ClarificationComponent: React.FC<ClarificationComponentProps> = ({ message
 
 export default function ModelPage() {
   const router = useRouter();
+  const { user } = useAuth();
 
   // Room dimensions state
   const [meshyModelUrl, setMeshyModelUrl] = useState<string | null>(null);
@@ -900,6 +1050,12 @@ export default function ModelPage() {
   const [librarySearchTerm, setLibrarySearchTerm] = useState('');
   const [libraryCategory, setLibraryCategory] = useState('All');
   const [librarySortBy, setLibrarySortBy] = useState('Name');
+
+  // Pinboard state for main component
+  const [showPinboardSearch, setShowPinboardSearch] = useState(false);
+  const [pinboards, setPinboards] = useState<any[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedPinboards, setSelectedPinboards] = useState<Array<{id: string, name: string, context: string}>>([]);
 
   // Load meshyModelUrl from localStorage on mount
   useEffect(() => {
@@ -1582,6 +1738,14 @@ When responding:
 4. Consider lighting and how it affects colors/materials
 5. Balance current trends with timeless design principles
 
+PINBOARD INTEGRATION:
+When pinboard context is provided in the user's message (look for "@pinboard[Name]: content" sections), you should:
+- Use the pinboard content as reference material for your design advice
+- Incorporate the user's saved notes, ideas, and inspiration from their pinboards
+- Reference specific elements mentioned in the pinboard context
+- Build upon the user's documented design preferences and ideas
+- Treat pinboard content as the user's saved design thoughts and inspiration
+
 AMAZON PRODUCT INTEGRATION:
 When Amazon product data is provided in the user's message, you should:
 - Analyze the products and provide personalized recommendations
@@ -1610,6 +1774,13 @@ Your responses should be confident but collaborative, acknowledging when other s
 - Ergonomic considerations and accessibility
 - Proportion and scale relationships
 
+PINBOARD INTEGRATION:
+When pinboard context is provided in the user's message (look for "@pinboard[Name]: content" sections), you should:
+- Use the pinboard content as reference for spatial planning decisions
+- Consider the user's saved layout ideas and furniture preferences from pinboards
+- Incorporate dimensional requirements and placement notes from their saved content
+- Reference specific spatial concepts mentioned in the pinboard context
+
 CRITICAL: When Amazon product data is provided in the user's message (look for "Here are some Amazon products that match your request:" section), you MUST use that data to give specific recommendations. Do NOT say you cannot browse the internet or recommend checking online retailers - the product data is provided directly to you.
 
 When responding:
@@ -1618,6 +1789,13 @@ When responding:
 3. Consider clearance requirements and building codes
 4. Think about how people will move through and use the space
 5. Balance multiple functional needs
+
+PINBOARD INTEGRATION:
+When pinboard context is provided in the user's message (look for "@pinboard[Name]: content" sections), you should:
+- Use the pinboard content to understand technical requirements and constraints
+- Consider saved measurements, specifications, and technical notes from pinboards
+- Reference structural or installation considerations mentioned in the pinboard context
+- Incorporate budget constraints or material preferences from their saved content
 
 AMAZON PRODUCT INTEGRATION:
 When Amazon product data is provided in the user's message, you should:
@@ -1653,6 +1831,13 @@ When responding:
 3. Consider real-world implementation challenges
 4. Provide cost-effective alternatives when needed
 5. Ensure safety and building compliance
+
+PINBOARD INTEGRATION:
+When pinboard context is provided in the user's message (look for "@pinboard[Name]: content" sections), you should:
+- Use the pinboard content to understand technical requirements and constraints
+- Consider saved measurements, specifications, and technical notes from pinboards
+- Reference structural or installation considerations mentioned in the pinboard context
+- Incorporate budget constraints or material preferences from their saved content
 
 AMAZON PRODUCT INTEGRATION:
 When Amazon product data is provided in the user's message, you should:
@@ -1825,6 +2010,90 @@ Your role is to ground creative ideas in practical reality while supporting the 
     [roomId, userPermission]
   );
 
+  // Fetch user's pinboards for main component
+  const fetchPinboardsMain = useCallback(async () => {
+    if (!user) return;
+    
+    try {
+      const pinboardsRef = collection(db, "pinboards");
+      const q = query(
+        pinboardsRef,
+        where("userId", "==", user.uid),
+        orderBy("updatedAt", "desc")
+      );
+      const querySnapshot = await getDocs(q);
+      
+      const pinboardList: any[] = [];
+      querySnapshot.forEach((doc) => {
+        const data = doc.data();
+        const updatedAt = data.updatedAt?.toDate?.() || 
+                         data.pinboard?.updatedAt?.toDate?.() || 
+                         new Date(data.updatedAt) || 
+                         data.createdAt?.toDate?.() ||
+                         new Date();
+        
+        pinboardList.push({
+          id: doc.id,
+          name: data.name || `Pinboard #${doc.id.slice(-6)}`,
+          updatedAt: updatedAt,
+          notes: data.pinboard?.notes || [],
+          images: data.pinboard?.images || [],
+          drawings: data.pinboard?.drawings || []
+        });
+      });
+      
+      setPinboards(pinboardList);
+    } catch (error) {
+      console.error("Error fetching pinboards:", error);
+    }
+  }, [user]);
+
+  // Handle @ button click for main component
+  const handleAtButtonClickMain = () => {
+    setShowPinboardSearch(!showPinboardSearch);
+    setSearchQuery('');
+    if (!showPinboardSearch && user) {
+      fetchPinboardsMain();
+    }
+  };
+
+  // Add pinboard to message for main component
+  const addPinboardToMessageMain = useCallback(async (pinboard: any) => {
+    try {
+      // Get pinboard notes using the extract-notes API
+      const response = await fetch('/api/extract-notes', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ pinboardId: pinboard.id }),
+      });
+
+      if (response.ok) {
+        const notesData = await response.json();
+        const contextText = notesData.summary || 'No notes found in this pinboard';
+        
+        // Add to selected pinboards (Cursor-style)
+        setSelectedPinboards(prev => {
+          // Check if pinboard is already selected
+          const exists = prev.find(p => p.id === pinboard.id);
+          if (exists) return prev;
+          
+          return [...prev, {
+            id: pinboard.id,
+            name: pinboard.name,
+            context: contextText
+          }];
+        });
+        
+        setShowPinboardSearch(false);
+        chatInputBarRef.current?.focus();
+      }
+    } catch (error) {
+      console.error('Error adding pinboard context:', error);
+    }
+  }, []);
+
   // Effect to persist room state changes to Firestore
   useEffect(() => {
     if (!isLoaded || !roomId) return;
@@ -1926,8 +2195,15 @@ Your role is to ground creative ideas in practical reality while supporting the 
       const USE_STREAMING_MULTI_AGENT = true;
       if (USE_STREAMING_MULTI_AGENT) {
         try {
+          // Include pinboard context in the user message if any pinboards are selected
+          let enhancedUserMessage = userMessage;
+          if (selectedPinboards.length > 0) {
+            const pinboardContext = selectedPinboards.map(p => `@pinboard[${p.name}]: ${p.context}`).join('\n\n');
+            enhancedUserMessage = `${pinboardContext}\n\nUser question: ${userMessage}`;
+          }
+
           const multiAgentRequest = {
-            user_input: userMessage,
+            user_input: enhancedUserMessage,
             userId: user?.uid, // Add userId for memory integration
             room_state: {
               width,
@@ -1954,11 +2230,16 @@ Your role is to ground creative ideas in practical reality while supporting the 
             user_preferences: { style: 'modern', room_purpose: 'living room' },
           };
 
+          console.log('🔍 CALLING BACKEND directly:', 'http://127.0.0.1:8001/multi-agent-design-stream');
+          console.log('🔍 Request payload:', multiAgentRequest);
+          
           const response = await fetch('http://127.0.0.1:8001/multi-agent-design-stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(multiAgentRequest),
           });
+          
+          console.log('🔍 Response received:', response.ok, response.status);
 
           if (!response.ok || !response.body) {
             throw new Error(`Multi-agent stream error: ${response.status}`);
@@ -2018,6 +2299,8 @@ Your role is to ground creative ideas in practical reality while supporting the 
               if (!line.trim()) continue;
               let evt: any;
               try { evt = JSON.parse(line); } catch { continue; }
+
+              console.log('🔍 RAW EVENT RECEIVED:', evt.type, evt);
 
               switch (evt.type) {
                 case 'orchestrator_plan': {
@@ -2157,9 +2440,35 @@ Your role is to ground creative ideas in practical reality while supporting the 
                   break;
                 }
                 case 'final': {
+                  console.log('🔍 FINAL EVENT RECEIVED:', evt);
+                  console.log('🔍 evt.message:', evt.message);
+                  console.log('🔍 evt.results:', evt.results);
+                  
                   progressData.finalMessage = evt.message || 'Multi-agent analysis complete.';
                   progressData.isComplete = true;
                   await updateProgress(progressData);
+                  
+                  // Handle search results in final response
+                  if (evt.results && evt.message === 'search-results') {
+                    console.log('🔍 ✅ SEARCH RESULTS CONDITION MET! Creating message...');
+                    const searchResultsMessage = {
+                      role: 'assistant' as const,
+                      content: 'search-results',
+                      results: evt.results
+                    } as any;
+                    console.log('🔍 Message to add:', searchResultsMessage);
+                    setChatMessages(prev => {
+                      const newMessages = [...prev, searchResultsMessage];
+                      console.log('🔍 All chat messages after adding:', newMessages);
+                      return newMessages;
+                    });
+                  } else {
+                    console.log('🔍 ❌ CONDITION FAILED');
+                    console.log('🔍 Has results?', !!evt.results);
+                    console.log('🔍 Message equals "search-results"?', evt.message === 'search-results');
+                    console.log('🔍 evt.message type:', typeof evt.message);
+                    console.log('🔍 evt.message value:', JSON.stringify(evt.message));
+                  }
                   break;
                 }
                 case 'clarification_needed': {
@@ -2298,20 +2607,32 @@ Your role is to ground creative ideas in practical reality while supporting the 
 
         // Handle text response
         if (data.type === 'text_response') {
-          const assistantMessage = {
+          const assistantMessage: any = {
             role: 'assistant' as const,
             content: data.message || 'Multi-agent analysis complete.'
           };
+          
+          // Preserve results field if present (for search results display)
+          if (data.results) {
+            assistantMessage.results = data.results;
+          }
+          
           setChatMessages([...newMessages, assistantMessage]);
           setIsLoading(false);
           return;
         }
 
         // Handle any other response type
-        const assistantMessage = {
+        const assistantMessage: any = {
           role: 'assistant' as const,
           content: data.message || 'Multi-agent analysis complete.'
         };
+        
+        // Preserve results field if present (for search results display)
+        if (data.results) {
+          assistantMessage.results = data.results;
+        }
+        
         setChatMessages([...newMessages, assistantMessage]);
         setIsLoading(false);
         return;
@@ -2423,8 +2744,15 @@ Your role is to ground creative ideas in practical reality while supporting the 
   
     // SIMPLE 3-AGENT SYSTEM
     try {
+      // Include pinboard context for regular chat as well
+      let enhancedUserMessage = userMessage;
+      if (selectedPinboards.length > 0) {
+        const pinboardContext = selectedPinboards.map(p => `@pinboard[${p.name}]: ${p.context}`).join('\n\n');
+        enhancedUserMessage = `${pinboardContext}\n\nUser question: ${userMessage}`;
+      }
+
       // Analyze user intent to select the appropriate agent
-      const intents = analyzeUserIntent(userMessage);
+      const intents = analyzeUserIntent(enhancedUserMessage);
       const primaryAgent = selectPrimaryAgent(intents, agentContext);
       
       // Prepare enhanced context for the specialized agent
@@ -2434,7 +2762,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          prompt: userMessage,
+          prompt: enhancedUserMessage,
           userId: user?.uid, // Add userId for Pinecone storage
           agentSystem: {
             systemPrompt: agentSystem[primaryAgent].systemPrompt,
@@ -2623,6 +2951,10 @@ Your role is to ground creative ideas in practical reality while supporting the 
       ]);
     } finally {
       setIsLoading(false);
+      // Clear selected pinboards after message is sent
+      // if (selectedPinboards.length > 0) {
+      //   setSelectedPinboards([]);
+      // }
     }
   };
 
@@ -2752,8 +3084,6 @@ Your role is to ground creative ideas in practical reality while supporting the 
   const [amazonKnowledgeBaseEnabled, setAmazonKnowledgeBaseEnabled] = useState(false);
   const [isSearchingProducts, setIsSearchingProducts] = useState(false);
 
-  
-  const { user } = useAuth();
   const owner = { email: user?.email || "you@example.com", name: "You" };
 
   // Message Content Renderer
@@ -2808,6 +3138,41 @@ Your role is to ground creative ideas in practical reality while supporting the 
     });
   };
 
+  // Function to highlight @search keyword with special styling
+  const highlightSearchKeyword = (text: string) => {
+    if (!text.includes('@search')) return text;
+    
+    const parts = text.split(/(@search\w*)/g);
+    return (
+      <span>
+        {parts.map((part, index) => {
+          if (part.startsWith('@search')) {
+            return (
+              <span key={index} style={{
+                backgroundColor: '#facc14',
+                color: '#18181b',
+                padding: '2px 6px',
+                borderRadius: '6px',
+                fontWeight: '700',
+                fontSize: '0.9em',
+                fontFamily: 'Menlo, Monaco, monospace',
+                border: '1px solid #eab308',
+                boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                display: 'inline-block',
+                margin: '0 2px',
+                textTransform: 'none',
+                letterSpacing: '0.5px'
+              }}>
+                {part}
+              </span>
+            );
+          }
+          return <span key={index}>{part}</span>;
+        })}
+      </span>
+    );
+  };
+
   // Helper function to render formatted text with links
   const renderFormattedText = (text: string) => {
     // Handle URLs - make them clickable
@@ -2848,8 +3213,14 @@ Your role is to ground creative ideas in practical reality while supporting the 
         });
       }
       
-      return part;
+      // Handle @search keywords
+      if (part.includes('@search')) {
+        return highlightSearchKeyword(part);
+      }
+      
+      return <span key={index}>{part}</span>;
     });
+    
   };
 
   // Amazon Product Search Function
@@ -5378,7 +5749,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
                           }, 50);
                         }}
                       />
-                    ) : msg.content === 'search-results' && (msg as any).results ? (
+                    ) : (console.log('🔍 CHECKING MESSAGE:', msg, 'content:', msg.content, 'results:', (msg as any).results), msg.content === 'search-results' && (msg as any).results) ? (
                       /* Special handling for search results */
                       <div style={{
                         marginTop: 16,
@@ -5580,6 +5951,10 @@ Your role is to ground creative ideas in practical reality while supporting the 
                                       const btn = ev.currentTarget as HTMLButtonElement;
                                       try {
                                         btn.disabled = true; btn.textContent = 'Generating…';
+                                        // 1) Find dimensions for the object we are generating
+                                        
+
+
                                         // 1) Resolve image URL
                                         const imgUrl = item.image || '';
                                         if (!imgUrl) throw new Error('No image available');
@@ -5591,7 +5966,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
                                         fd.append('file', file);
                                         fd.append('photo_perspective', 'front');
                                         // 3) Call clip_server generate endpoint
-                                        const clipUrl = (process.env.NEXT_PUBLIC_CLIP_SERVER_URL || 'http://localhost:8000') + '/generate-room-model';
+                                        const clipUrl = (process.env.NEXT_PUBLIC_CLIP_SERVER_URL || 'http://localhost:8000') + '/generate-object';
                                         const resp = await fetch(clipUrl, { method: 'POST', body: fd });
                                         const data = await resp.json();
                                         const modelUrl = data?.model_data?.meshy_model_url || data?.meshy_model_url || data?.model_url;
@@ -5602,7 +5977,9 @@ Your role is to ground creative ideas in practical reality while supporting the 
                                           id: `meshy-${Date.now()}`,
                                           name: item.title || 'Generated Model',
                                           x: 0, y: 0, z: 0,
-                                          width: 4, height: 2, depth: 4,
+                                          depth: item.dimensions?.depth || 4,
+                                          width: item.dimensions?.width || 4,
+                                          height: item.dimensions?.height || 2,
                                           color: '#cccccc',
                                           modelPath: proxied,
                                         };
@@ -6014,6 +6391,72 @@ Your role is to ground creative ideas in practical reality while supporting the 
                   gap: '8px',
                   marginBottom: '12px',
                 }}>
+                  {/* @ Add Pinboard Button */}
+                  <button
+                    type="button"
+                    onClick={handleAtButtonClickMain}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      padding: '6px 8px',
+                      borderRadius: '6px',
+                      border: showPinboardSearch ? '1px solid #fad600' : '1px solid #e2e8f0',
+                      background: showPinboardSearch ? '#fad600' : '#ffffff',
+                      color: showPinboardSearch ? '#18181b' : '#64748b',
+                      fontSize: '11px',
+                      fontWeight: 500,
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease',
+                      boxShadow: showPinboardSearch ? '0 1px 3px rgba(250, 214, 0, 0.3)' : '0 1px 2px rgba(0, 0, 0, 0.05)'
+                    }}
+                    title="Add pinboard context"
+                  >
+                    <span style={{ fontSize: '12px', fontWeight: 'bold' }}>@</span>
+                  </button>
+
+                  {/* Selected Pinboard Chips */}
+                  {selectedPinboards.map((pinboard) => (
+                    <div
+                      key={pinboard.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        padding: '6px 8px',
+                        borderRadius: '6px',
+                        border: '1px solid #e2e8f0',
+                        background: '#f8fafc',
+                        color: '#1e293b',
+                        fontSize: '11px',
+                        fontWeight: 500,
+                        boxShadow: '0 1px 2px rgba(0, 0, 0, 0.05)'
+                      }}
+                    >
+                      <FileText size={12} color="#64748b" />
+                      <span>{pinboard.name}</span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedPinboards(prev => prev.filter(p => p.id !== pinboard.id));
+                        }}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          cursor: 'pointer',
+                          padding: '0',
+                          marginLeft: '2px',
+                          color: '#64748b',
+                          fontSize: '14px',
+                          lineHeight: '1'
+                        }}
+                        title="Remove pinboard"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+
                   {/* Agent Mode Toggle */}
                   <button
                     type="button"
@@ -6021,25 +6464,25 @@ Your role is to ground creative ideas in practical reality while supporting the 
                     style={{
                       display: 'flex',
                       alignItems: 'center',
-                      gap: '6px',
-                      padding: '8px 12px',
-                      borderRadius: '8px',
+                      gap: '4px',
+                      padding: '6px 10px',
+                      borderRadius: '6px',
                       border: multiAgentMode ? '1px solid #fad600' : '1px solid #e2e8f0',
                       background: multiAgentMode ? '#fad600' : '#ffffff',
                       color: multiAgentMode ? '#18181b' : '#64748b',
-                      fontSize: '13px',
+                      fontSize: '11px',
                       fontWeight: 500,
                       cursor: 'pointer',
                       transition: 'all 0.2s ease',
                       boxShadow: multiAgentMode ? '0 1px 3px rgba(250, 214, 0, 0.3)' : '0 1px 2px rgba(0, 0, 0, 0.05)'
                     }}
                   >
-                    <Users size={16} />
+                    <Users size={12} />
                     <span>Agent Mode</span>
                   </button>
 
                   {/* Amazon Knowledge Base Toggle */}
-                  <button
+                  {/* <button
                     type="button"
                     onClick={() => {
                       const newState = !amazonKnowledgeBaseEnabled;
@@ -6063,7 +6506,7 @@ Your role is to ground creative ideas in practical reality while supporting the 
                   >
                     <ShoppingBag size={16} />
                     <span>{isSearchingProducts ? 'Searching...' : 'Amazon'}</span>
-                  </button>
+                  </button> */}
 
                   {/* Status Indicator */}
                   <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -6085,6 +6528,106 @@ Your role is to ground creative ideas in practical reality while supporting the 
                       }} />
                     )}
                   </div>
+
+                  {/* Pinboard Search Modal */}
+                  {showPinboardSearch && (
+                    <>
+                      <div
+                        style={{
+                          position: 'fixed',
+                          top: 0,
+                          left: 0,
+                          width: '100vw',
+                          height: '100vh',
+                          zIndex: 999,
+                          background: 'transparent',
+                        }}
+                        onClick={() => setShowPinboardSearch(false)}
+                      />
+                      <div style={{
+                        position: 'absolute',
+                        bottom: '150px',
+                        left: '0',
+                        width: '320px',
+                        background: '#ffffff',
+                        border: '1px solid #e2e8f0',
+                        borderRadius: '12px',
+                        boxShadow: '0 10px 40px rgba(0, 0, 0, 0.1)',
+                        maxHeight: '300px',
+                        zIndex: 1000,
+                        overflow: 'hidden'
+                      }}>
+                        {/* Search Input */}
+                        <input
+                          type="text"
+                          placeholder="Search by name..."
+                          value={searchQuery}
+                          onChange={e => setSearchQuery(e.target.value)}
+                          style={{
+                            width: '100%',
+                            padding: '12px 16px',
+                            border: 'none',
+                            borderBottom: '1px solid #f1f5f9',
+                            borderRadius: '0',
+                            fontSize: '14px',
+                            outline: 'none',
+                            boxSizing: 'border-box',
+                            background: '#ffffff',
+                            color: '#1e293b'
+                          }}
+                        />
+
+                        {/* Pinboard List */}
+                        <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+                          {pinboards.filter(pinboard =>
+                            pinboard.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                            pinboard.id.toLowerCase().includes(searchQuery.toLowerCase())
+                          ).length === 0 ? (
+                            <div style={{
+                              padding: '20px',
+                              textAlign: 'center',
+                              color: '#64748b',
+                              fontSize: '14px'
+                            }}>
+                              {pinboards.length === 0 ? 'No pinboards found' : 'No matching pinboards'}
+                            </div>
+                          ) : (
+                            pinboards.filter(pinboard =>
+                              pinboard.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                              pinboard.id.toLowerCase().includes(searchQuery.toLowerCase())
+                            ).map(pinboard => (
+                              <div
+                                key={pinboard.id}
+                                onClick={() => addPinboardToMessageMain(pinboard)}
+                                style={{
+                                  padding: '12px 16px',
+                                  borderBottom: '1px solid #f8fafc',
+                                  cursor: 'pointer',
+                                  transition: 'background-color 0.2s ease'
+                                }}
+                                onMouseEnter={e => {
+                                  e.currentTarget.style.backgroundColor = '#f8fafc';
+                                }}
+                                onMouseLeave={e => {
+                                  e.currentTarget.style.backgroundColor = 'transparent';
+                                }}
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                                  <span style={{ fontSize: '16px' }}>📋</span>
+                                  <span style={{ fontSize: '14px', fontWeight: '500', color: '#1e293b' }}>
+                                    {pinboard.name}
+                                  </span>
+                                </div>
+                                <div style={{ fontSize: '12px', color: '#64748b', marginLeft: '24px' }}>
+                                  {pinboard.notes.length} notes • {pinboard.images.length} images • {pinboard.drawings.length} drawings
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 {/* Input Container */}

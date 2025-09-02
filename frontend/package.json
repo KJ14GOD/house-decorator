@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --turbopack",
+    "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"
@@ -13,6 +13,7 @@
     "@langchain/core": "^0.3.62",
     "@langchain/langgraph": "^0.3.7",
     "@langchain/openai": "^0.5.18",
+    "@mendable/firecrawl-js": "^3.2.1",
     "@pinecone-database/pinecone": "^6.1.2",
     "@react-three/drei": "^10.4.2",
     "@react-three/fiber": "^9.1.4",

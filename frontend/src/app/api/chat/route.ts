@@ -6,7 +6,6 @@ import { MemoryRetrieval } from '@/lib/memory/memoryRetrieval';
 
 // Use environment variable for OpenAI API key
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-console.log('OPENAI_API_KEY', OPENAI_API_KEY);
 
 if (!OPENAI_API_KEY) {
   throw new Error('OPENAI_API_KEY is not set in environment variables');
