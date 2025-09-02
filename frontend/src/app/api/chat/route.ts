@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import admin from '@/lib/firebase/firebase-admin';
+import * as adminTypes from 'firebase-admin';
 import { storeConversationPair } from '@/lib/simpleStorage';
 import { ChatLearning } from '@/lib/memory/chatLearning';
 import { MemoryRetrieval } from '@/lib/memory/memoryRetrieval';
@@ -323,7 +324,7 @@ User Request: ${prompt}` },
           }
         
           const db = admin.firestore();
-          let roomsQuery: admin.firestore.Query = db.collection('rooms').where('userId', '==', userId);
+          let roomsQuery: adminTypes.firestore.Query = db.collection('rooms').where('userId', '==', userId);
         
           if (from) {
             roomsQuery = roomsQuery.where('createdAt', '>=', createLocalTimeFromISO(from, timezoneOffset || 0));
