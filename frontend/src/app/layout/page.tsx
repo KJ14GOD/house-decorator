@@ -32,7 +32,7 @@ function GLBModelPreview({ block, scale, roomWidth, roomLength }: {
   
   // Debug: Log materials to see what's available and fix material properties
   clonedScene.traverse((child) => {
-    if (child.isMesh) {
+    if (child instanceof THREE.Mesh) {
       console.log('GLB Preview Mesh material:', child.name, child.material);
       if (child.material.map) {
         console.log('Preview has texture:', child.material.map);
@@ -48,18 +48,20 @@ function GLBModelPreview({ block, scale, roomWidth, roomLength }: {
         
         // If it's a MeshStandardMaterial, ensure proper settings
         if (child.material.type === 'MeshStandardMaterial') {
-          child.material.roughness = child.material.roughness || 0.8;
-          child.material.metalness = child.material.metalness || 0.0;
+          const material = child.material as THREE.MeshStandardMaterial;
+          material.roughness = material.roughness || 0.8;
+          material.metalness = material.metalness || 0.0;
         }
         
         // If the material is too dark, adjust it
-        if (child.material.color && child.material.color.getHSL) {
-          const hsl = {};
-          child.material.color.getHSL(hsl);
+        const material = child.material as any;
+        if (material.color && material.color.getHSL) {
+          const hsl = { h: 0, s: 0, l: 0 };
+          material.color.getHSL(hsl);
           console.log('Preview Material HSL:', hsl);
           // If lightness is very low, increase it slightly
           if (hsl.l < 0.2) {
-            child.material.color.setHSL(hsl.h, hsl.s, Math.max(0.3, hsl.l));
+            material.color.setHSL(hsl.h, hsl.s, Math.max(0.3, hsl.l));
             console.log('Adjusted preview material color for better visibility');
           }
         }
