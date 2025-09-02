@@ -385,7 +385,7 @@ async function generateQuery(state) {
     modelName: configuration.query_generator_model,
     temperature: 1.0,
     maxRetries: 2,
-    openAIApiKey: process.env.OPENAI_API_KEY,
+    openAIApiKey: getOpenAIKey(),
   });
 
   const structuredLlm = llm.withStructuredOutput(SearchQueryList);
@@ -445,7 +445,7 @@ async function webResearch(state) {
     modelName: configuration.query_generator_model,
     temperature: 0,
     maxRetries: 2,
-    openAIApiKey: process.env.OPENAI_API_KEY,
+    openAIApiKey: getOpenAIKey(),
   });
 
   const currentDate = getCurrentDate();
@@ -693,7 +693,7 @@ async function reflection(state) {
     modelName: configuration.reflection_model,
     temperature: 1.0,
     maxRetries: 2,
-    openAIApiKey: process.env.OPENAI_API_KEY,
+    openAIApiKey: getOpenAIKey(),
   });
 
   const structuredLlm = llm.withStructuredOutput(Reflection);
@@ -751,7 +751,7 @@ async function finalizeAnswer(state) {
     modelName: configuration.answer_model,
     temperature: 0,
     maxRetries: 2,
-    openAIApiKey: process.env.OPENAI_API_KEY,
+    openAIApiKey: getOpenAIKey(),
   });
 
   const currentDate = getCurrentDate();
@@ -876,6 +876,15 @@ function createResearchGraph() {
     apiKey: process.env.TAVILY_API_KEY,
   });
   console.log(' Tavily search tool initialized successfully');
+
+  // Helper function to get OpenAI API key
+  function getOpenAIKey() {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      throw new Error('OPENAI_API_KEY environment variable is required for research');
+    }
+    return apiKey;
+  }
 
   const workflow = new StateGraph({
     channels: {

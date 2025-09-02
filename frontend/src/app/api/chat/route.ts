@@ -5,11 +5,13 @@ import { storeConversationPair } from '@/lib/simpleStorage';
 import { ChatLearning } from '@/lib/memory/chatLearning';
 import { MemoryRetrieval } from '@/lib/memory/memoryRetrieval';
 
-// Use environment variable for OpenAI API key
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-
-if (!OPENAI_API_KEY) {
-  throw new Error('OPENAI_API_KEY is not set in environment variables');
+// Use environment variable for OpenAI API key - lazy initialization
+function getOpenAIKey() {
+  const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+  if (!OPENAI_API_KEY) {
+    throw new Error('OPENAI_API_KEY is not set in environment variables');
+  }
+  return OPENAI_API_KEY;
 }
 
 export const runtime = 'nodejs';
@@ -280,7 +282,7 @@ IMPORTANT: When you determine an action is needed, respond with ONLY the raw JSO
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Authorization': `Bearer ${getOpenAIKey()}`,
       },
       body: JSON.stringify({
         model: 'gpt-4o-mini',
