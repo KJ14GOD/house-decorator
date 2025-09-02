@@ -547,7 +547,7 @@ async def check_room_and_objects(file: UploadFile = File(...)):
             "message": f"Error processing image for room and object detection: {str(e)}"
         }
 
-@app.post("/generate-room-model")
+@app.post("/generate-object")
 async def generate_room_model(file: UploadFile = File(...), photo_perspective: str = Form('inside')):
     """
     Generates a 3D room model based on the uploaded image and photo perspective.

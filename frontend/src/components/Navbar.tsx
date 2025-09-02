@@ -67,7 +67,7 @@ export default function Navbar() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 32 }}>
             <Link href="/layout" style={{ textDecoration: "none", color: "#000000", fontSize: 17, marginTop: '-10px' }}>Layout</Link>
             <Link href="/board" style={{ textDecoration: "none", color: "#000000", fontSize: 17, marginTop: '-10px' }}>Board</Link>
-            <Link href="#" style={{ textDecoration: "none", color: "#000000", fontSize: 17, marginTop: '-10px' }}>Pricing</Link>
+            {/* <Link href="#" style={{ textDecoration: "none", color: "#000000", fontSize: 17, marginTop: '-10px' }}>Pricing</Link> */}
           </div>
         </div>
       </div>

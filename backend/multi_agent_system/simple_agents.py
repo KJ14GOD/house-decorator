@@ -953,148 +953,171 @@ def color_agent(state: AgentState) -> AgentState:
 import requests
 from firecrawl import Firecrawl
 firecrawl = Firecrawl(api_key=os.getenv("FIRECRAWL_API_KEY"))
-# --- Firecrawl Search Tools ---
-def firecrawl_search(query: str, max_results: int = 10, sources: List[str] = None) -> Dict[str, Any] | None:
-    """
-    Searches using Firecrawl v2 HTTP API to ensure consistent JSON shape.
-    Returns parsed JSON or None on error.
-    """
-    print(f"🔍 Searching for: {query}")
-    api_key = os.getenv('FIRECRAWL_API_KEY', '')
-    print(f"🔍 Using API key: {api_key[:10]}...")
 
+# --- Firecrawl Search Tools ---
+
+def firecrawl_search_ikea(query: str, max_results: int = 5) -> dict:
+    """
+    Search specifically on IKEA product pages using FireCrawl
+    Only searches URLs starting with https://www.ikea.com/us/en/p/
+    """
     try:
-        payload: Dict[str, Any] = {
-            "query": query,
-            "sources": sources if sources else ["images"],
-            "categories": [],
-            "limit": max_results,
-            "scrapeOptions": {
-                "onlyMainContent": True,
-                "maxAge": 172800000,
-                "parsers": ["pdf"],
-                "formats": []
+        # Configure search query to only target IKEA product pages
+        search_query = f"site:www.ikea.com inurl:/us/en/p/ {query}"
+        
+        print(f"🔍 FireCrawl searching IKEA products for: {query}")
+        print(f"🔎 Search query: {search_query}")
+        
+        # Use FireCrawl search with screenshot format to get previews
+        response = firecrawl.search(
+            search_query, 
+            limit=max_results,
+            scrape_options={
+                "formats": [{"type": "screenshot"}]
             }
-        }
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-        print(f"🔍 POST https://api.firecrawl.dev/v2/search with payload: {payload}")
-        resp = requests.post("https://api.firecrawl.dev/v2/search", json=payload, headers=headers, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        print(f"🔍 Firecrawl v2 returned keys: {list(data.keys())}")
-        return data
+        )
+        
+        print(f"🔄 FireCrawl response type: {type(response)}")
+        print(f"🔄 FireCrawl response: {response}")
+        
+        # Handle FireCrawl response object - it has a 'web' attribute with search results
+        if response and hasattr(response, 'web') and response.web:
+            results = []
+            web_results = response.web if isinstance(response.web, list) else [response.web]
+            
+            for item in web_results[:max_results]:
+                # Extract data from Document objects - data is in metadata
+                if hasattr(item, 'metadata'):
+                    metadata = item.metadata
+                    url = getattr(metadata, 'url', '')
+                    title = getattr(metadata, 'title', '')
+                    description = getattr(metadata, 'description', '')
+                else:
+                    # Fallback to direct attributes if metadata doesn't exist
+                    url = getattr(item, 'url', '')
+                    title = getattr(item, 'title', '')
+                    description = getattr(item, 'description', '')
+                
+                print(f"🔍 Processing item - URL: {url}, Title: {title}")
+                
+                # Double-check URL filtering for IKEA product pages only
+                if url and url.startswith('https://www.ikea.com/us/en/p/'):
+                    # Get the screenshot from the screenshot format
+                    screenshot_url = None
+                    if hasattr(item, 'screenshot') and item.screenshot:
+                        screenshot_url = item.screenshot
+                        print(f"📸 Found screenshot: {screenshot_url}")
+                    else:
+                        print(f"⚠️ No screenshot found for {url}")
+                    
+                    results.append({
+                        'title': title,
+                        'url': url,
+                        'description': description,
+                        'content': description,  # Use description as content preview
+                        'image': screenshot_url  # Store the screenshot URL as image
+                    })
+                    print(f"✅ Found IKEA product: {title or 'No title'}")
+                elif url:
+                    print(f"❌ Filtered out non-product URL: {url}")
+                else:
+                    print(f"⚠️ No URL found in item: {item}")
+            
+            print(f"📊 FireCrawl found {len(results)} IKEA product results")
+            return {
+                'success': True,
+                'results': results,
+                'total_found': len(results)
+            }
+        
+        return {'success': False, 'results': [], 'error': 'No results found or invalid response format'}
+        
     except Exception as e:
-        print(f"Firecrawl search error: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
+        print(f"❌ FireCrawl search error: {e}")
+        return {'success': False, 'results': [], 'error': str(e)}
 
 # --- Search Agent ---
 def search_agent(state: AgentState) -> AgentState:
-    print("🔎 --- Search Agent ---")
-    query = state.get('user_query', '')
+    """
+    Handles @search queries by using FireCrawl to search IKEA product pages.
+    Extracts search query after @search keyword and returns formatted results.
+    """
+    print("🔍 --- Search Agent CALLED ---")
+    print(f"🔍 State received: {state}")
+    print("🔍 --- Search Agent ---")
+    
+    user_query = state.get('user_query', '')
     
     # Extract search query after @search
-    if '@search' in query:
-        search_query = query.split('@search', 1)[1].strip()
-        print(f"🔍 Search query: {search_query}")
+    if '@search' not in user_query:
+        state['search_results'] = []
+        state['final_message'] = "No @search keyword found in query."
+        return state
+    
+    # Get everything after @search as the search query
+    search_query = user_query.split('@search', 1)[1].strip()
+    
+    if not search_query:
+        state['search_results'] = []
+        state['final_message'] = "Please provide a search query after @search (e.g., '@search minimalist beds')"
+        return state
+    
+    print(f"📝 Search query extracted: '{search_query}'")
+    
+    # Perform FireCrawl search on IKEA
+    search_results = firecrawl_search_ikea(search_query, max_results=5)
+    
+    if search_results['success'] and search_results['results']:
+        # Format results for display
+        formatted_results = []
+        for result in search_results['results']:
+            # Use the image from FireCrawl result (screenshot)
+            image_url = result.get('image', '')
+            product_code = ""
+            
+            if result['url']:
+                url_parts = result['url'].split('/')
+                if len(url_parts) > 5:
+                    product_code = url_parts[-2]  # e.g., 'tiphede-rug-flatwoven-natural-black-40559166'
+            
+            formatted_results.append({
+                'title': result['title'],
+                'url': result['url'],
+                'content': result['description'],  # UI expects 'content' field
+                'description': result['description'],
+                'image': image_url,  # This should now be the screenshot URL
+                'product_code': product_code,
+                'dimensions': {
+                    'width': 4,
+                    'height': 2, 
+                    'depth': 4
+                }
+            })
         
-        try:
-            # Always search for images only, restricted to approved domains
-            allowed_domains = [
-                'amazon.com', 'amazon.ca', 'amazon.co.uk', 'amazon.de', 'amazon.in',
-                'ikea.com',
-                'wayfair.com', 'wayfair.co.uk'
-            ]
-
-            site_filter = "(site:amazon.com OR site:ikea.com OR site:wayfair.com)"
-            restricted_query = f"{site_filter} {search_query}".strip()
-            print(f"🔍 Searching for images only on approved domains: {restricted_query}")
-            results = firecrawl_search(restricted_query, max_results=10, sources=['images'])
-            
-            print(f" Raw Firecrawl results: {results}")
-            
-            # Convert Firecrawl v2 JSON image results to expected format
-            formatted_results = []
-            if results and isinstance(results, dict):
-                images = []
-                if 'data' in results and isinstance(results['data'], dict) and 'images' in results['data']:
-                    images = results['data'].get('images') or []
-                elif 'images' in results:
-                    images = results.get('images') or []
-
-                print(f"🔍 Found {len(images)} image results")
-                for item in images:
-                    title = item.get('title') or 'Product'
-                    url = item.get('url') or ''
-                    image_url = item.get('imageUrl') or None
-                    description = item.get('description') or ''
-                    formatted_results.append({
-                        "title": title,
-                        "url": url,
-                        "content": description,
-                        "score": 0.8,
-                        "image": image_url,
-                    })
-                # Post-filter by allowlist to be safe
-                def is_allowed(u: str) -> bool:
-                    try:
-                        from urllib.parse import urlparse
-                        host = urlparse(u).hostname or ''
-                        return any(d in host for d in allowed_domains)
-                    except Exception:
-                        return False
-
-                before = len(formatted_results)
-                formatted_results = [r for r in formatted_results if is_allowed(r.get('url', ''))]
-                print(f"🔍 Domain allowlist filtered {before} -> {len(formatted_results)} results")
-            else:
-                print(f"🔍 No image results found. Results type: {type(results)}")
-            
-            final_msg = f"🔍 **Search Results for '{search_query}'**\n\nFound {len(formatted_results)} results. Pick one to add to your room, or refine your search."
-            agent_trace_events = [{"type": "thought", "agent": "search_agent", "content": final_msg}]
-            return {
-                **state,
-                "agent_used": "search_agent",
-                "final_message": final_msg,
-                "reasoning": final_msg,
-                "search_query": search_query,
-                "search_results": formatted_results,
-                "latest_trace_events": agent_trace_events,
-                "new_tool_calls": [],
-            }
-        except Exception as e:
-            print(f"Search agent error: {e}")
-            final_msg = f"❌ Sorry, I encountered an error while searching for '{search_query}'. Please try again."
-            agent_trace_events = [{"type": "thought", "agent": "search_agent", "content": final_msg}]
-            return {
-                **state,
-                "agent_used": "search_agent",
-                "final_message": final_msg,
-                "reasoning": final_msg,
-                "search_query": search_query,
-                "search_results": [],
-                "latest_trace_events": agent_trace_events,
-                "new_tool_calls": [],
-            }
-    else:
-        # No @search keyword found
-        final_msg = "No search query found. Use '@search' followed by what you want to find."
-        agent_trace_events = [{"type": "thought", "agent": "search_agent", "content": final_msg}]
-        return {
-            **state,
-            "agent_used": "search_agent",
-            "final_message": final_msg,
-            "reasoning": final_msg,
-            "search_query": "",
-            "search_results": [],
-            "latest_trace_events": agent_trace_events,
-            "new_tool_calls": [],
+        state['search_results'] = formatted_results
+        state['search_type'] = 'ikea_products'
+        
+        # Format response for the model page UI (expects 'search-results' content and results.items)
+        state['final_message'] = 'search-results'
+        state['results'] = {
+            'items': formatted_results,
+            'query': search_query,
+            'total': len(formatted_results)
         }
-
+        
+    else:
+        state['search_results'] = []
+        error_msg = search_results.get('error', 'Unknown error')
+        # Still return search-results format but with empty items
+        state['final_message'] = 'search-results'
+        state['results'] = {
+            'items': [],
+            'query': search_query,
+            'total': 0,
+            'error': f"No IKEA products found for '{search_query}'. Error: {error_msg}"
+        }
+    
+    return state
 
 # --- Conversation Agent ---
 def conversation_agent(state: AgentState) -> AgentState:
@@ -1340,8 +1363,8 @@ User Query: "{user_query}"
 Available Agents:
 - furniture_agent: furniture placement, selection, arrangement, moving, removing
 - color_agent: wall colors, ceiling colors, floor colors, color schemes, palettes
-- search_agent: finding furniture items online when the user asks to search for a sp
 - conversation_agent: answering questions, providing information, discussing preferences without making changes
+- search_agent: searches IKEA products using @search keyword (e.g., "@search minimalist beds")
 - intersection_agent: checks for furniture collisions/intersections (automatically added after furniture changes)
 
 Respond with valid JSON only:
@@ -1399,7 +1422,7 @@ Examples:
             session_id = state.get('session_id')
             if user_id:
                 for agent_name in state.get('agents_needed', []):
-                    if agent_name in ['furniture_agent', 'color_agent', 'conversation_agent', 'intersection_agent', 'search_agent']:
+                    if agent_name in ['furniture_agent', 'color_agent', 'conversation_agent', 'search_agent', 'intersection_agent']:
                         MemoryActionOps.record_routed_to(
                             user_id=user_id,
                             agent_name=agent_name,
@@ -1422,9 +1445,12 @@ Examples:
         has_color = any(keyword in user_query_lower for keyword in color_keywords)
         has_search = '@search' in user_query  # Check for @search keyword
         
+        
         if has_search:
+            print(f"🔍 ROUTER: Detected @search in query: {user_query}")
             state['agents_needed'] = ['search_agent']
             state['execution_strategy'] = 'sequential'
+            print(f"🔍 ROUTER: Set agents_needed to ['search_agent']")
         elif has_furniture and has_color:
             state['agents_needed'] = ['furniture_agent', 'color_agent']
             state['execution_strategy'] = 'sequential'
@@ -1435,7 +1461,7 @@ Examples:
             state['agents_needed'] = ['color_agent']
             state['execution_strategy'] = 'sequential'
         else:
-            state['agents_needed'] = ['furniture_agent']
+            state['agents_needed'] = ['conversation_agent']
             state['execution_strategy'] = 'sequential'
         
         state['routing_reasoning'] = 'Keyword-based fallback routing'
@@ -1537,7 +1563,11 @@ def complete_agent_execution(state: AgentState) -> AgentState:
             agent_summaries = []
             for result in state.get('agent_results', []):
                 agent_name = result['agent'].replace('_agent', '').title()
-                agent_summaries.append(f"{agent_name} Agent: {result['message']}")
+                # Special handling for search_agent - don't add prefix to preserve 'search-results' format
+                if result['agent'] == 'search_agent' and result['message'] == 'search-results':
+                    agent_summaries.append(result['message'])
+                else:
+                    agent_summaries.append(f"{agent_name} Agent: {result['message']}")
             
             combined_message = "\n\n".join(agent_summaries)
             state['final_message'] = combined_message
@@ -1592,6 +1622,7 @@ workflow.add_edge("furniture_agent", "complete_agent")
 workflow.add_edge("color_agent", "complete_agent")
 workflow.add_edge("conversation_agent", "complete_agent")
 workflow.add_edge("search_agent", "complete_agent")
+
 workflow.add_conditional_edges(
     "complete_agent",
     execute_next_agent,
@@ -1791,10 +1822,11 @@ def stream_workflow(initial_state: AgentState):
             result_state = color_agent(state)
         elif next_step == "conversation_agent":
             result_state = conversation_agent(state)
-        elif next_step == "intersection_agent":
-            result_state = intersection_agent(state)
         elif next_step == "search_agent":
             result_state = search_agent(state)
+        elif next_step == "intersection_agent":
+            result_state = intersection_agent(state)
+      
         else:
             result_state = state
 
@@ -1822,7 +1854,7 @@ def stream_workflow(initial_state: AgentState):
         allowed_tools_by_agent = {
             "furniture_agent": {"add_furniture", "move_furniture", "remove_furniture", "list_available_furniture"},
             "color_agent": {"change_wall_color", "change_ceiling_color", "change_floor_color", "analyze_room_colors", "suggest_color_palette"},
-            "search_agent": set(),
+            
         }
         allowed = allowed_tools_by_agent.get(next_step, set())
         # During collision resolution, restrict furniture tools to movement/removal only (avoid duplicate adds)
@@ -1901,22 +1933,18 @@ def stream_workflow(initial_state: AgentState):
         state = complete_agent_execution(result_state)
         yield {"type": "agent_complete", "agent": next_step}
 
-        # Stream search results as a dedicated event if present
-        if next_step == "search_agent" and result_state.get("search_results") is not None:
-            yield {
-                "type": "search_results",
-                "agent": "search_agent",
-                "query": result_state.get("search_query", state.get("user_query", "")),
-                "message": state.get("final_message", "Search completed"),
-                "items": result_state.get("search_results", []),
-            }
+        
 
     # Final summary
-    yield {
+    final_response = {
         "type": "final",
         "message": state.get("final_message", "Design request processed"),
         "agents_completed": state.get("agents_completed", []),
+        "results": state.get("results", None),  # Include search results for frontend display
     }
+    print(f"🔍 FINAL RESPONSE: {final_response}")
+    print(f"🔍 state.get('results'): {state.get('results', None)}")
+    yield final_response
 
 
 # --- FastAPI Application ---

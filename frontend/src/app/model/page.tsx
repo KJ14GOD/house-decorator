@@ -1056,6 +1056,31 @@ export default function ModelPage() {
   const [pinboards, setPinboards] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedPinboards, setSelectedPinboards] = useState<Array<{id: string, name: string, context: string}>>([]);
+  // One-row chip bar with +N overflow; Agent Mode wraps below when needed
+  const chipsRowRef = useRef<HTMLDivElement | null>(null);
+  const [maxChipsRow, setMaxChipsRow] = useState<number>(6);
+  const [showOverflow, setShowOverflow] = useState<boolean>(false);
+  const overflowHideTimerRef = useRef<any>(null);
+
+  useEffect(() => {
+    const recalc = () => {
+      let w = chipsRowRef.current?.clientWidth || 0;
+      if (w === 0 && typeof window !== 'undefined') {
+        // Fallback when ref width not ready: estimate usable width from window
+        const reserved = 52 + 160 + 48; // @ button + Agent Mode + spacing
+        w = Math.max(240, window.innerWidth - reserved);
+      }
+      const approxChip = 150; // avg chip width (icon + text + close + padding)
+      const n = Math.max(1, Math.floor(w / approxChip));
+      setMaxChipsRow(n);
+    };
+    const id = requestAnimationFrame(recalc);
+    window.addEventListener('resize', recalc);
+    return () => {
+      window.removeEventListener('resize', recalc);
+      cancelAnimationFrame(id);
+    };
+  }, [selectedPinboards.length]);
 
   // Load meshyModelUrl from localStorage on mount
   useEffect(() => {
@@ -6415,47 +6440,120 @@ Your role is to ground creative ideas in practical reality while supporting the 
                     <span style={{ fontSize: '12px', fontWeight: 'bold' }}>@</span>
                   </button>
 
-                  {/* Selected Pinboard Chips */}
-                  {selectedPinboards.map((pinboard) => (
-                    <div
-                      key={pinboard.id}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                        padding: '6px 8px',
-                        borderRadius: '6px',
-                        border: '1px solid #e2e8f0',
-                        background: '#f8fafc',
-                        color: '#1e293b',
-                        fontSize: '11px',
-                        fontWeight: 500,
-                        boxShadow: '0 1px 2px rgba(0, 0, 0, 0.05)'
-                      }}
-                    >
-                      <FileText size={12} color="#64748b" />
-                      <span>{pinboard.name}</span>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedPinboards(prev => prev.filter(p => p.id !== pinboard.id));
-                        }}
-                        style={{
-                          background: 'none',
-                          border: 'none',
-                          cursor: 'pointer',
-                          padding: '0',
-                          marginLeft: '2px',
-                          color: '#64748b',
-                          fontSize: '14px',
-                          lineHeight: '1'
-                        }}
-                        title="Remove pinboard"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
+                  {/* Selected Pinboard Chips - single row; overflow -> +N and Agent Mode moves to next line */}
+                  <div
+                    ref={chipsRowRef}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      flexWrap: 'nowrap',
+                      overflow: 'visible',
+                      maxWidth: '100%'
+                    }}
+                  >
+                    {(() => {
+                      const capacity = Math.max(1, maxChipsRow);
+                      const needsOverflow = selectedPinboards.length > capacity;
+                      const visible = needsOverflow
+                        ? [selectedPinboards[0], ...selectedPinboards.slice(1, 1 + Math.max(0, capacity - 2))]
+                        : selectedPinboards;
+                      return visible.map((pinboard) => (
+                        <div
+                          key={pinboard.id}
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: '4px',
+                            padding: '6px 8px', borderRadius: '6px',
+                            border: '1px solid #e2e8f0', background: '#f8fafc', color: '#1e293b',
+                            fontSize: '11px', fontWeight: 500, boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                            whiteSpace: 'nowrap'
+                          }}
+                        >
+                          <FileText size={12} color="#64748b" />
+                          <span>{pinboard.name}</span>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedPinboards(prev => prev.filter(p => p.id !== pinboard.id));
+                            }}
+                            style={{
+                              background: 'none', border: 'none', cursor: 'pointer', padding: 0,
+                              marginLeft: '2px', color: '#64748b', fontSize: '14px', lineHeight: '1'
+                            }}
+                            title="Remove pinboard"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ));
+                    })()}
+                    {(() => {
+                      const capacity = Math.max(1, maxChipsRow);
+                      const visibleCount = selectedPinboards.length > capacity
+                        ? 1 + Math.max(0, capacity - 2)
+                        : selectedPinboards.length;
+                      const overflow = Math.max(0, selectedPinboards.length - visibleCount);
+                      if (overflow <= 0) return null;
+                      const overflowItems = selectedPinboards.slice(visibleCount);
+                      return (
+                        <div
+                          onMouseEnter={() => {
+                            if (overflowHideTimerRef.current) clearTimeout(overflowHideTimerRef.current);
+                            setShowOverflow(true);
+                          }}
+                          onMouseLeave={() => {
+                            overflowHideTimerRef.current = setTimeout(() => setShowOverflow(false), 120);
+                          }}
+                          style={{ position: 'relative' }}
+                        >
+                          <div
+                            style={{
+                              padding: '6px 8px', borderRadius: '6px', border: '1px solid #e2e8f0',
+                              background: '#f8fafc', color: '#64748b', fontSize: '11px', fontWeight: 600,
+                              whiteSpace: 'nowrap', cursor: 'default'
+                            }}
+                          >
+                            +{overflow}
+                          </div>
+                          {showOverflow && (
+                            <div
+                              onMouseEnter={() => {
+                                if (overflowHideTimerRef.current) clearTimeout(overflowHideTimerRef.current);
+                                setShowOverflow(true);
+                              }}
+                              onMouseLeave={() => {
+                                overflowHideTimerRef.current = setTimeout(() => setShowOverflow(false), 120);
+                              }}
+                              style={{
+                                position: 'absolute', top: 'calc(100% + 8px)', left: 0,
+                                background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '8px',
+                                boxShadow: '0 10px 30px rgba(0,0,0,0.12)', padding: '8px',
+                                zIndex: 1000, minWidth: '220px'
+                              }}
+                            >
+                              {overflowItems.map(p => (
+                                <div key={p.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '6px 8px', borderBottom: '1px solid #f1f5f9' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                    <FileText size={12} color="#64748b" />
+                                    <span style={{ fontSize: '12px', color: '#1e293b' }}>{p.name}</span>
+                                  </div>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedPinboards(prev => prev.filter(x => x.id !== p.id));
+                                    }}
+                                    style={{ background: 'none', border: '1px solid #e2e8f0', borderRadius: '6px', padding: '2px 6px', fontSize: '12px', color: '#ef4444', cursor: 'pointer' }}
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
 
                   {/* Agent Mode Toggle */}
                   <button
